@@ -1,0 +1,27 @@
+# exo node image for the Experiment 4 harness (Linux CPU backend).
+# Build once:  podman build -t exo-node -f measure/exo/Containerfile measure/exo
+# Pin the exo commit the measurements were taken at; bump deliberately.
+ARG EXO_COMMIT=bc412e2
+
+FROM docker.io/library/python:3.13-slim
+
+ARG EXO_COMMIT
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential nodejs npm iproute2 iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir uv
+
+WORKDIR /opt
+RUN git clone https://github.com/exo-explore/exo && cd exo && git checkout ${EXO_COMMIT}
+WORKDIR /opt/exo
+RUN cd dashboard && npm install && npm run build && cd ..
+RUN uv sync --extra mlx-cpu
+
+# per-node state (pid, logs, downloaded models) lives here; mount a volume per node
+ENV EXO_HOME=/data
+VOLUME /data
+
+# 52413/udp discovery, 52414/tcp zenoh, 52415/tcp API
+EXPOSE 52413/udp 52414/tcp 52415/tcp
+ENTRYPOINT ["uv", "run", "exo"]
