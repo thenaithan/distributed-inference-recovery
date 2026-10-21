@@ -238,9 +238,14 @@ def main() -> None:
 
     with open(args.out, "a") as f:
         f.write(json.dumps(rec) + "\n")
-    print(json.dumps({k: rec[k] for k in ("mode", "tokens_before_end", "end_kind", "t_fail",
-                                           "t_stream_end", "t_instance_gone", "t_replace_ready",
-                                           "t_resubmit_first_token") if k in rec}, indent=1))
+    summary = {k: rec[k] for k in ("mode", "tokens_before_end", "end_kind", "t_fail",
+                                   "t_stream_end", "t_instance_gone", "t_replace_ready",
+                                   "t_resubmit_first_token") if k in rec}
+    err = (last or {}).get("error")
+    if err:  # expected after a failure; with --mode none it means the plumbing is broken
+        msg = err.get("message", err) if isinstance(err, dict) else err
+        summary["error"] = str(msg)[:500]
+    print(json.dumps(summary, indent=1))
 
 
 if __name__ == "__main__":
