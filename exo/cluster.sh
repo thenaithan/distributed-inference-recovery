@@ -4,7 +4,8 @@
 #   ./cluster.sh up [N]        start N nodes (default 3) on an IPv6-enabled podman network;
 #                              nodes already running are left alone, stopped ones restarted
 #   ./cluster.sh down          stop and remove them (volumes with downloaded models are kept)
-#   ./cluster.sh ip <i>        print node i's IPv4 on the cluster network
+#   ./cluster.sh ip <i>        print node i's IPv4 on the cluster network (inside podman's
+#                              network; the host reaches node i's API on localhost:52415+i)
 #   ./cluster.sh logs <i>      follow node i's log
 #   ./cluster.sh kill  <i>     SIGKILL node i's container   (clean crash: peers see a reset)
 #   ./cluster.sh pause <i>     SIGSTOP node i's container   (silent hang: peers see nothing)
@@ -73,11 +74,13 @@ case "$cmd" in
         $( [ "${#CPUSETS[@]}" -gt 0 ] && echo "--cpuset-cpus ${CPUSETS[$i]}" ) \
         -v "exo-data-$i:/data" \
         -e EXO_ZENOH_NAMESPACE="$NS" \
-        $( [ "$i" = 0 ] && echo "-p 52415:52415" ) \
+        -p "$((52415 + i)):52415" \
         "$IMG" >/dev/null
       echo "started exo-$i${CPUSETS[$i]:+ on CPUs ${CPUSETS[$i]}}"
     done
-    echo "API of node 0 on http://localhost:52415 ; others via ./cluster.sh ip <i>"
+    # Every node's API is published (node i on 52415+i): rootless podman's container IPs
+    # are generally not reachable from the host, and master-loss trials need a survivor's.
+    echo "API of node i on http://localhost:<52415+i> (node 0: 52415, node 1: 52416, ...)"
     ;;
   down)
     for c in $(podman ps -a --format '{{.Names}}' | grep '^exo-' || true); do podman rm -f "$c" >/dev/null; done

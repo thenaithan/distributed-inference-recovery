@@ -20,8 +20,10 @@ What it does, with wall-clock timestamps on every step (time.time(), one host, o
 Records one JSON line per trial. Nothing here is specific to our simulation; analyze.py
 turns these into detect / recover / replay components and churnsim parameters.
 
-The master is node 0 by default (it has the published API port). `--fail-node 0` measures
-master loss instead of worker loss; expect an election rather than an error chunk.
+The master has been node 0 in every run so far (its log says "Node elected Master"; check
+it before master-loss trials). `--fail-node 0` measures master loss instead of worker loss;
+expect an election rather than an error chunk. Talk to a survivor for those trials:
+cluster.sh publishes node i's API on localhost:52415+i, so `--base http://localhost:52416`.
 """
 
 from __future__ import annotations
@@ -132,7 +134,10 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
     statuses: dict = {}
     timeline: list = []  # [t, {runner_id: status}] on every change: load vs warmup split
     while now() < deadline:
-        st = api(base, "/state")
+        st = poll_state(base)
+        if st is None:
+            time.sleep(0.5)
+            continue
         found = find_instance(st)
         if found:
             instance_id, inst = found
@@ -218,11 +223,30 @@ def inject(mode: str, node: int) -> float:
     return float(out.stdout.strip().splitlines()[0])
 
 
+def poll_state(base: str) -> dict | None:
+    """GET /state, or None on a transient failure: exo pauses its API during an election,
+    and the polled node may itself be the one that just failed. Callers keep polling."""
+    try:
+        state = api(base, "/state", timeout=5)
+        _UNAVAILABLE_SINCE.pop(base, None)
+        return state
+    except (ApiError, OSError) as e:  # URLError, connection reset and timeouts are OSErrors
+        since = _UNAVAILABLE_SINCE.setdefault(base, now())
+        if now() - _LAST_UNAVAILABLE_LOG.get(base, 0) >= 10:  # log once per 10 s of outage
+            _LAST_UNAVAILABLE_LOG[base] = now()
+            log(f"/state unavailable for {now() - since:.0f}s ({type(e).__name__}); retrying")
+        return None
+
+
+_UNAVAILABLE_SINCE: dict = {}
+_LAST_UNAVAILABLE_LOG: dict = {}
+
+
 def wait_instance_gone(base: str, instance_id: str, timeout: float = 120.0) -> float | None:
     deadline = now() + timeout
     while now() < deadline:
-        st = api(base, "/state")
-        if instance_id not in st.get("instances", {}):
+        st = poll_state(base)
+        if st is not None and instance_id not in st.get("instances", {}):
             return now()
         time.sleep(0.25)
     return None
