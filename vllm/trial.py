@@ -91,7 +91,9 @@ def worker_pids(server_pid: int) -> list[int]:
 
 
 def stream(on_token, max_tokens=400):
+    # thinking off, as in exo/trial.py, so both systems prefill the same templated prompt
     body = {"model": MODEL, "stream": True, "max_tokens": max_tokens, "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "user", "content": PROMPT}]}
     req = urllib.request.Request(f"{BASE}/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -112,7 +114,8 @@ def stream(on_token, max_tokens=400):
                 if "error" in obj:
                     return n, now(), "error_chunk", obj
                 ch = obj.get("choices") or []
-                if ch and ch[0].get("delta", {}).get("content"):
+                delta = ch[0].get("delta", {}) if ch else {}
+                if delta.get("content") or delta.get("reasoning_content"):
                     n += 1
                     on_token(n, now())
                 if ch and ch[0].get("finish_reason"):

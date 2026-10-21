@@ -156,7 +156,11 @@ def stream(base: str, on_token, max_tokens: int = 30, stall_timeout: float = STA
     """Run a streaming chat completion; call on_token(index, t) per content chunk.
     Returns (n_tokens, t_end, end_kind, last_payload). Ends with "harness_timeout" when no
     token arrives for stall_timeout seconds (counted from the request until the first)."""
-    body = {"model": MODEL, "stream": True, "max_tokens": max_tokens,
+    # enable_thinking=False: Qwen3 thinks by default, and exo streams thinking tokens as
+    # delta.reasoning_content, so a short request could produce no content at all and the
+    # failure would never be injected. temperature 0 matches vllm/trial.py.
+    body = {"model": MODEL, "stream": True, "max_tokens": max_tokens, "temperature": 0,
+            "enable_thinking": False,
             "stream_options": {"include_usage": True},
             "messages": [{"role": "user", "content": PROMPT}]}
     req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
@@ -183,8 +187,10 @@ def stream(base: str, on_token, max_tokens: int = 30, stall_timeout: float = STA
                 if "error" in obj or obj.get("object") == "error":
                     return n, now(), "error_chunk", obj
                 choices = obj.get("choices") or []
-                if choices and (choices[0].get("delta", {}).get("content") or choices[0].get("finish_reason")):
-                    if choices[0].get("delta", {}).get("content"):
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    # every generated token counts, thinking or not (usage splits them)
+                    if delta.get("content") or delta.get("reasoning_content"):
                         n += 1
                         t_progress = now()
                         on_token(n, t_progress)
