@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -249,18 +250,31 @@ def node_cpusets(n: int) -> list:
     return sets
 
 
-def master_node(n: int) -> int | None:
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def master_node(n: int, settle: float = 60.0) -> int | None:
     """Which node is master right now, from the nodes' own logs: the master logs
     "Node elected Master - maintaining/promoting self", followers "Node <id> elected master".
     exo exposes no API for it. The role moves with every election (a cluster restart, a
-    master loss), so it is read per trial. None if no node's log says so."""
-    masters = []
-    for i in range(n):
-        out = subprocess.run(["podman", "logs", "--tail", "5000", f"exo-{i}"], capture_output=True, text=True)
-        lines = [l for l in (out.stdout + out.stderr).splitlines() if "elected" in l]
-        if lines and "Node elected Master" in lines[-1]:
-            masters.append(i)
-    return masters[-1] if len(masters) == 1 else None
+    master loss), so it is read per trial. A node that has just started declares itself
+    master until it finds the others (about 3 s), so wait until exactly one node claims the
+    role; None if the cluster has not settled within `settle` seconds."""
+    deadline = now() + settle
+    while True:
+        masters = []
+        for i in range(n):
+            out = subprocess.run(["podman", "logs", "--tail", "5000", f"exo-{i}"], capture_output=True, text=True)
+            lines = [ANSI.sub("", l) for l in (out.stdout + out.stderr).splitlines() if "elected" in l]
+            if lines and "Node elected Master" in lines[-1]:
+                masters.append(i)
+        if len(masters) == 1:
+            return masters[0]
+        if now() >= deadline:
+            log(f"no single master after {settle:.0f}s (self-declared: {masters})")
+            return None
+        log(f"waiting for the cluster to agree on a master (self-declared: {masters})")
+        time.sleep(2.0)
 
 
 def node_ids(n: int) -> list:
