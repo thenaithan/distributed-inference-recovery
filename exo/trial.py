@@ -78,6 +78,27 @@ def place(base: str, min_nodes: int, deadline: float) -> float:
             time.sleep(1.0)
 
 
+# exo serializes state with camelCase aliases and wraps each tagged-union value in its class
+# name: instances are {id: {"MlxRingInstance": {...}}}, runners {id: {"RunnerReady": {...}}}.
+# Ready is RunnerReady or RunnerRunning, the test exo's own worker uses (worker/plan.py).
+READY = {"RunnerReady", "RunnerRunning"}
+
+
+def tag(wrapped) -> tuple[str | None, dict]:
+    if isinstance(wrapped, dict) and len(wrapped) == 1:
+        (name, inner), = wrapped.items()
+        return name, inner
+    return None, {}
+
+
+def find_instance(st: dict) -> tuple[str, dict] | None:
+    for instance_id, wrapped in st.get("instances", {}).items():
+        inst = tag(wrapped)[1]
+        if inst.get("shardAssignments", {}).get("modelId") == MODEL:
+            return instance_id, inst
+    return None
+
+
 def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
     t0 = now()
     deadline = t0 + timeout
@@ -91,19 +112,24 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
             if line.startswith(b"data:"):
                 break
     t_placed = now()
+    statuses: dict = {}
     while now() < deadline:
         st = api(base, "/state")
-        inst = [i for i in st.get("instances", {}).values()
-                if i.get("shard_assignments", {}).get("model_id") == MODEL]
-        runners = st.get("runners", {})
-        ready = inst and all(
-            (runners.get(rid, {}).get("status") or runners.get(rid, {}).get("type", "")).lower().find("ready") >= 0
-            for rid in inst[0].get("shard_assignments", {}).get("runner_to_shard", {}).keys()
-        ) if inst else False
-        if ready:
-            return dict(t_place_try=t_try, t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(), instance=inst[0])
+        found = find_instance(st)
+        if found:
+            instance_id, inst = found
+            runners = st.get("runners", {})
+            statuses = {rid: tag(runners.get(rid))[0]
+                        for rid in inst.get("shardAssignments", {}).get("runnerToShard", {})}
+            for rid, status in statuses.items():
+                if status == "RunnerFailed":
+                    raise RuntimeError(f"runner {rid} failed: {tag(runners[rid])[1]}")
+            if statuses and all(s in READY for s in statuses.values()):
+                return dict(t_place_try=t_try, t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(),
+                            instance_id=instance_id)
         time.sleep(0.5)
-    raise RuntimeError("instance not ready within timeout; check ./cluster.sh logs 0")
+    raise RuntimeError(f"instance not ready within timeout (runners: {statuses or 'no instance'}); "
+                       "check ./cluster.sh logs 0")
 
 
 def stream(base: str, on_token, max_tokens: int = 400):
@@ -172,9 +198,8 @@ def main() -> None:
                      mode=args.mode, at_token=args.at_token, host_time=now())
 
     placed = place_and_wait(base, args.nodes)
-    rec.update({k: v for k, v in placed.items() if k != "instance"})
-    instance_id = placed["instance"].get("instance_id") or placed["instance"].get("id")
-    rec["instance_id"] = instance_id
+    rec.update(placed)
+    instance_id = placed["instance_id"]
 
     tokens: list = []
     state = {"injected": None}
