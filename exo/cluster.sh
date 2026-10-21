@@ -22,11 +22,11 @@ NET=exo-net
 IMG=exo-node
 NS=${EXO_NAMESPACE:-exp4}
 N_DEFAULT=3
-# One CPU set per node, so nodes behave like separate machines and are equal. Default is
-# the authoring machine (i5-14600K: P-core threads 0-11, E-cores 12-19): two P-cores per
-# node, E-cores left to the host and the harness. vllm/trial.py binds its ranks to the
-# first two sets. EXO_CPUSETS="" disables pinning.
-read -r -a CPUSETS <<< "${EXO_CPUSETS-0-3 4-7 8-11}"
+# Optional: one CPU set per node, so nodes behave like separate, equal machines, e.g.
+# EXO_CPUSETS="0-3 4-7 8-11" on an i5-14600K (P-core threads 0-11, E-cores 12-19). Off by
+# default: rootless podman needs the cpuset cgroup controller delegated by systemd, which
+# takes a re-login. Pin vLLM to match (VLLM_CPU_OMP_THREADS_BIND="0-3|4-7") or neither.
+read -r -a CPUSETS <<< "${EXO_CPUSETS-}"
 
 cmd=${1:-}; arg=${2:-}
 

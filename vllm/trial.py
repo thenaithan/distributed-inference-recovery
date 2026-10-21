@@ -40,10 +40,10 @@ MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-0.6B")
 PORT = int(os.environ.get("VLLM_PORT", "8000"))
 BASE = f"http://localhost:{PORT}"
 PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rivers, one per line."
-# Bind each PP rank's OpenMP threads to the same CPUs as exo's nodes 0 and 1
-# (exo/cluster.sh EXO_CPUSETS), so both systems get equal, separate cores. A server started
-# elsewhere and passed with --server-pid must be launched with the same variable.
-CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND", "0-3|4-7")
+# OpenMP thread binding per PP rank. Default "auto" is vLLM's own. When exo's nodes are
+# pinned (exo/cluster.sh EXO_CPUSETS), set the same sets here, e.g. "0-3|4-7", so both
+# systems get equal cores. A server passed with --server-pid must be launched with it too.
+CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND", "auto")
 SERVE_CMD = ["vllm", "serve", MODEL, "--pipeline-parallel-size", "2", "--port", str(PORT),
              "--max-model-len", "2048"]
 
