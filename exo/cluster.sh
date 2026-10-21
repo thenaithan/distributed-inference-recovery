@@ -34,7 +34,11 @@ case "$cmd" in
     ensure_net
     for i in $(seq 0 $((n-1))); do
       podman volume exists "exo-data-$i" 2>/dev/null || podman volume create "exo-data-$i" >/dev/null
+      # /tmp on tmpfs: MLX's CPU backend JIT-compiles kernels to /tmp/mlx/<ver>/cpu with
+      # names up to 252 bytes, which the overlay /tmp can refuse ("File name too long")
+      # depending on the host filesystem. exec, since MLX dlopens what it compiles there.
       podman run -d --name "exo-$i" --network "$NET" \
+        --tmpfs /tmp:rw,exec,mode=1777 \
         -v "exo-data-$i:/data" \
         -e EXO_ZENOH_NAMESPACE="$NS" \
         $( [ "$i" = 0 ] && echo "-p 52415:52415" ) \
