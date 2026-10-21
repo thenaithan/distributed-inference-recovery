@@ -1,4 +1,4 @@
-# exo node image for the Experiment 4 harness (Linux CPU backend).
+# exo node image for the Experiment 3 harness (Linux CPU backend).
 # Build once:  podman build -t exo-node -f measure/exo/Containerfile measure/exo
 # Pin the exo commit the measurements were taken at; bump deliberately.
 ARG EXO_COMMIT=bc412e2
