@@ -48,6 +48,14 @@ def now() -> float:
     return time.time()
 
 
+PROGRESS_EVERY = 10  # tokens between progress lines
+
+
+def log(msg: str) -> None:
+    """Progress to stderr, so a slow run is visibly alive; stdout keeps the summary."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
 def api(base: str, path: str, body=None, method=None, timeout=30):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method or ("POST" if data else "GET"),
@@ -223,7 +231,13 @@ def main() -> None:
         tokens.append(t)
         if args.mode != "none" and i == args.at_token and state["injected"] is None:
             state["injected"] = inject(args.mode, args.fail_node)
+            log(f"injected {args.mode} on node {args.fail_node} at token {i}")
+        if i == 1:
+            log(f"first token {t - t_req:.1f}s after the request")
+        elif i % PROGRESS_EVERY == 0:
+            log(f"{i} tokens, {(t - tokens[0]) / (i - 1):.2f}s/token")
 
+    log(f"instance ready ({placed['t_ready'] - placed['t_place_try']:.0f}s); streaming")
     t_req = now()
     n, t_end, kind, last = stream(base, on_token, stall_timeout=args.stall_timeout)
     rec.update(t_request=t_req, tokens_before_end=n, t_first_token=tokens[0] if tokens else None,
