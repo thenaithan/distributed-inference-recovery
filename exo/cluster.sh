@@ -21,7 +21,7 @@ set -euo pipefail
 
 NET=exo-net
 IMG=exo-node
-NS=${EXO_NAMESPACE:-exp4}
+NS=${EXO_NAMESPACE:-exp3}
 N_DEFAULT=3
 # Optional: one CPU set per node, so nodes behave like separate, equal machines, e.g.
 # EXO_CPUSETS="0-3 4-7 8-11" on an i5-14600K (P-core threads 0-11, E-cores 12-19). Off by
