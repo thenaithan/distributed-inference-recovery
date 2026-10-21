@@ -46,6 +46,9 @@ MODEL = "mlx-community/Qwen3-0.6B-8bit"
 # above exo's own stall detection (RUNNER_STALL_TIMEOUT 90 s), so it never pre-empts what we
 # measure. Such trials end with end_kind "harness_timeout" = exo did not end the stream.
 STALL_TIMEOUT = 300.0
+# Healthy ranks connect within ~2 s of runner creation; a rank still Idle/Connecting this
+# long after placement never will (no timeout in exo for that phase).
+CONNECT_TIMEOUT = 90.0
 PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rivers, one per line."
 
 
@@ -181,6 +184,14 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
             for rid, status in statuses.items():
                 if status == "RunnerFailed":
                     raise RuntimeError(f"runner {rid} failed: {tag(runners[rid])[1]}")
+            # exo has no timeout on ConnectToGroup: if one rank never joins, the others block
+            # in MLX's ring setup forever (seen 2026-10-21, the master node's runner stayed
+            # Idle). Fail fast with the statuses rather than wait out the whole timeout.
+            if (statuses and now() - t_placed > CONNECT_TIMEOUT
+                    and all(s in (None, "RunnerIdle", "RunnerConnecting") for s in statuses.values())):
+                raise RuntimeError(f"runners never connected within {CONNECT_TIMEOUT:.0f}s of placement "
+                                   f"(statuses: {statuses}); exo is wedged, recreate the cluster: "
+                                   f"./cluster.sh down && ./cluster.sh up")
             if statuses and all(s in READY for s in statuses.values()):
                 return dict(t_place_try=t_try, t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(),
                             instance_id=instance_id, status_timeline=timeline)
