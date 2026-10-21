@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start / stop / inspect an N-node exo cluster in rootless Podman on one Linux host.
 #
-#   ./cluster.sh up [N]        start N nodes (default 3) on an IPv6-enabled podman network
+#   ./cluster.sh up [N]        start N nodes (default 3) on an IPv6-enabled podman network;
+#                              nodes already running are left alone, stopped ones restarted
 #   ./cluster.sh down          stop and remove them (volumes with downloaded models are kept)
 #   ./cluster.sh ip <i>        print node i's IPv4 on the cluster network
 #   ./cluster.sh logs <i>      follow node i's log
@@ -21,6 +22,11 @@ NET=exo-net
 IMG=exo-node
 NS=${EXO_NAMESPACE:-exp4}
 N_DEFAULT=3
+# One CPU set per node, so nodes behave like separate machines and are equal. Default is
+# the authoring machine (i5-14600K: P-core threads 0-11, E-cores 12-19): two P-cores per
+# node, E-cores left to the host and the harness. vllm/trial.py binds its ranks to the
+# first two sets. EXO_CPUSETS="" disables pinning.
+read -r -a CPUSETS <<< "${EXO_CPUSETS-0-3 4-7 8-11}"
 
 cmd=${1:-}; arg=${2:-}
 
@@ -28,22 +34,48 @@ ensure_net() {
   podman network exists "$NET" 2>/dev/null || podman network create --ipv6 "$NET" >/dev/null
 }
 
+# Rootless podman can pin CPUs only if systemd delegates the cpuset controller to the user.
+ensure_cpuset() {
+  local f="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+  if [ -f "$f" ] && ! grep -qw cpuset "$f"; then
+    cat >&2 <<'MSG'
+cpuset controller not delegated to your user, so podman cannot pin CPUs. Once, as root:
+  mkdir -p /etc/systemd/system/user@.service.d
+  printf '[Service]\nDelegate=cpu cpuset io memory pids\n' > /etc/systemd/system/user@.service.d/delegate.conf
+  systemctl daemon-reload
+then log out and back in. (Or run with EXO_CPUSETS="" to not pin.)
+MSG
+    exit 1
+  fi
+}
+
 case "$cmd" in
   up)
     n=${arg:-$N_DEFAULT}
+    if [ "${#CPUSETS[@]}" -gt 0 ]; then
+      [ "$n" -le "${#CPUSETS[@]}" ] || { echo "EXO_CPUSETS has ${#CPUSETS[@]} sets for $n nodes" >&2; exit 1; }
+      ensure_cpuset
+    fi
     ensure_net
     for i in $(seq 0 $((n-1))); do
+      state=$(podman inspect -f '{{.State.Status}}' "exo-$i" 2>/dev/null || true)
+      if [ "$state" = running ] || [ "$state" = paused ]; then
+        echo "exo-$i already $state"; continue
+      elif [ -n "$state" ]; then  # killed or exited: restart the same container (fresh NodeId)
+        podman start "exo-$i" >/dev/null; echo "restarted exo-$i"; continue
+      fi
       podman volume exists "exo-data-$i" 2>/dev/null || podman volume create "exo-data-$i" >/dev/null
       # /tmp on tmpfs: MLX's CPU backend JIT-compiles kernels to /tmp/mlx/<ver>/cpu with
       # names up to 252 bytes, which the overlay /tmp can refuse ("File name too long")
       # depending on the host filesystem. exec, since MLX dlopens what it compiles there.
       podman run -d --name "exo-$i" --network "$NET" \
         --tmpfs /tmp:rw,exec,mode=1777 \
+        $( [ "${#CPUSETS[@]}" -gt 0 ] && echo "--cpuset-cpus ${CPUSETS[$i]}" ) \
         -v "exo-data-$i:/data" \
         -e EXO_ZENOH_NAMESPACE="$NS" \
         $( [ "$i" = 0 ] && echo "-p 52415:52415" ) \
         "$IMG" >/dev/null
-      echo "started exo-$i"
+      echo "started exo-$i${CPUSETS[$i]:+ on CPUs ${CPUSETS[$i]}}"
     done
     echo "API of node 0 on http://localhost:52415 ; others via ./cluster.sh ip <i>"
     ;;
@@ -58,5 +90,5 @@ case "$cmd" in
   resume) date +%s.%N; podman unpause "exo-$arg" >/dev/null ;;
   cut)    date +%s.%N; podman network disconnect "$NET" "exo-$arg" ;;
   heal)   date +%s.%N; podman network connect "$NET" "exo-$arg" ;;
-  *) sed -n 2,16p "$0"; exit 1 ;;
+  *) sed -n 2,18p "$0"; exit 1 ;;
 esac

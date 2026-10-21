@@ -187,6 +187,16 @@ def stream(base: str, on_token, max_tokens: int = 400, stall_timeout: float = ST
     return n, now(), "eof", last
 
 
+def node_cpusets(n: int) -> list:
+    """CPU set each node container actually runs on (cluster.sh EXO_CPUSETS), for the record."""
+    sets = []
+    for i in range(n):
+        out = subprocess.run(["podman", "inspect", "-f", "{{.HostConfig.CpusetCpus}}", f"exo-{i}"],
+                             capture_output=True, text=True)
+        sets.append(out.stdout.strip() if out.returncode == 0 else None)
+    return sets
+
+
 def inject(mode: str, node: int) -> float:
     out = subprocess.run([str(HERE / "cluster.sh"), mode, str(node)], capture_output=True, text=True, check=True)
     return float(out.stdout.strip().splitlines()[0])
@@ -218,7 +228,7 @@ def main() -> None:
 
     rec: dict = dict(label=args.label, model=MODEL, nodes=args.nodes, fail_node=args.fail_node,
                      mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
-                     host_time=now())
+                     host_time=now(), cpusets=node_cpusets(args.nodes))
 
     placed = place_and_wait(base, args.nodes)
     rec.update(placed)

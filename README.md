@@ -23,6 +23,12 @@ a clean crash, a silent hang, and a network partition.
 
 ## Quick start
 
+Both harnesses pin each node or PP rank to its own CPUs: by default two P-cores each
+(`0-3`, `4-7`, `8-11`) on the i5-14600K the trials ran on, with the E-cores left to the host.
+On other CPUs set `EXO_CPUSETS` (exo, one set per node) and `VLLM_CPU_OMP_THREADS_BIND`
+(vLLM, `set0|set1`) to equal sets of physical cores. Rootless Podman needs the `cpuset`
+cgroup controller delegated; `cluster.sh up` says how if it is not.
+
 exo (needs Podman with IPv6 networking; first build downloads the model per node):
 
 ```

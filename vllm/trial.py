@@ -40,6 +40,10 @@ MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-0.6B")
 PORT = int(os.environ.get("VLLM_PORT", "8000"))
 BASE = f"http://localhost:{PORT}"
 PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rivers, one per line."
+# Bind each PP rank's OpenMP threads to the same CPUs as exo's nodes 0 and 1
+# (exo/cluster.sh EXO_CPUSETS), so both systems get equal, separate cores. A server started
+# elsewhere and passed with --server-pid must be launched with the same variable.
+CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND", "0-3|4-7")
 SERVE_CMD = ["vllm", "serve", MODEL, "--pipeline-parallel-size", "2", "--port", str(PORT),
              "--max-model-len", "2048"]
 
@@ -58,7 +62,8 @@ def healthy(timeout=2.0) -> bool:
 
 def launch_server() -> tuple[subprocess.Popen, float, float]:
     t0 = now()
-    env = dict(os.environ, VLLM_LOGGING_LEVEL=os.environ.get("VLLM_LOGGING_LEVEL", "INFO"))
+    env = dict(os.environ, VLLM_LOGGING_LEVEL=os.environ.get("VLLM_LOGGING_LEVEL", "INFO"),
+               VLLM_CPU_OMP_THREADS_BIND=CPU_BIND)
     proc = subprocess.Popen(SERVE_CMD, env=env, stdout=open("vllm-serve.log", "ab"), stderr=subprocess.STDOUT)
     while not healthy():
         if proc.poll() is not None:
@@ -129,7 +134,7 @@ def main() -> None:
     args = ap.parse_args()
 
     rec: dict = dict(label=args.label, model=MODEL, mode=args.mode, at_token=args.at_token,
-                     fail_rank=args.fail_rank, host_time=now(), pp=2)
+                     fail_rank=args.fail_rank, host_time=now(), pp=2, omp_threads_bind=CPU_BIND)
 
     if args.server_pid:
         proc, spid = None, args.server_pid
