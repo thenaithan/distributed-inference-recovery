@@ -31,6 +31,7 @@ import sys
 import time
 from pathlib import Path
 
+import urllib.error
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -46,14 +47,41 @@ def api(base: str, path: str, body=None, method=None, timeout=30):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method or ("POST" if data else "GET"),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode() or "null")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode() or "null")
+    except urllib.error.HTTPError as e:
+        # exo puts the reason in the body ({"detail": ...}); urllib's message drops it
+        raise ApiError(e.code, path, e.read().decode(errors="replace")) from None
+
+
+class ApiError(Exception):
+    def __init__(self, code: int, path: str, body: str):
+        super().__init__(f"HTTP {code} from {path}: {body}")
+        self.code = code
+
+
+def place(base: str, min_nodes: int, deadline: float) -> float:
+    """POST /place_instance, retrying while exo refuses with 400 (it checks the request
+    against its current topology, so it refuses until the nodes have found each other,
+    and again after a failure until the dead node is dropped). Returns when it was first
+    tried; raises with exo's last reason if it is still refused at the deadline."""
+    t_first = now()
+    while True:
+        try:
+            api(base, "/place_instance", {"model_id": MODEL, "sharding": "Pipeline",
+                                          "instance_meta": "MlxRing", "min_nodes": min_nodes})
+            return t_first
+        except ApiError as e:
+            if e.code != 400 or now() >= deadline:
+                raise
+            time.sleep(1.0)
 
 
 def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
     t0 = now()
-    api(base, "/place_instance", {"model_id": MODEL, "sharding": "Pipeline",
-                                  "instance_meta": "MlxRing", "min_nodes": min_nodes})
+    deadline = t0 + timeout
+    t_try = place(base, min_nodes, deadline)
     t_cmd = now()
     # /instance/await streams one SSE line when an instance for the model exists in state;
     # "exists" is placement, not warm. We then poll /state for a ready runner.
@@ -63,7 +91,6 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
             if line.startswith(b"data:"):
                 break
     t_placed = now()
-    deadline = t0 + timeout
     while now() < deadline:
         st = api(base, "/state")
         inst = [i for i in st.get("instances", {}).values()
@@ -74,7 +101,7 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
             for rid in inst[0].get("shard_assignments", {}).get("runner_to_shard", {}).keys()
         ) if inst else False
         if ready:
-            return dict(t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(), instance=inst[0])
+            return dict(t_place_try=t_try, t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(), instance=inst[0])
         time.sleep(0.5)
     raise RuntimeError("instance not ready within timeout; check ./cluster.sh logs 0")
 
@@ -171,7 +198,7 @@ def main() -> None:
         survivors = args.nodes - 1
         try:
             re = place_and_wait(base, survivors)
-            rec.update(t_replace_cmd=re["t_place_cmd"], t_replaced=re["t_placed"], t_replace_ready=re["t_ready"])
+            rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"], t_replaced=re["t_placed"], t_replace_ready=re["t_ready"])
             first = {}
             n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=20)
             rec.update(t_resubmit_first_token=first.get("t"), resubmit_end_kind=kind2)
