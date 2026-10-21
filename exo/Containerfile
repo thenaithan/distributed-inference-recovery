@@ -18,10 +18,23 @@ WORKDIR /opt/exo
 RUN cd dashboard && npm install && npm run build && cd ..
 RUN uv sync --extra mlx-cpu
 
+# exo's mlx-cpu extra is broken at this commit (still so on main as of 2026-10-21): it pairs
+# the mlx binding from a JACCL-fix fork (a CUDA build, no CPU lib in that release) with
+# mlx-cpu 0.31.2 from PyPI, and the runner dies on import with an undefined
+# mlx::core::linalg::det symbol. No PyPI mlx-cpu matches the fork's binding; the official
+# mlx 0.32.0 binding resolves every symbol against mlx-cpu 0.32.0 (checked with nm), and is
+# the pair upstream mlx declares for mlx[cpu]. The fork only fixes JACCL (RDMA); the
+# harness uses MlxRing.
+ARG MLX_VERSION=0.32.0
+RUN uv pip install --python .venv/bin/python --no-deps \
+        "mlx==${MLX_VERSION}" "mlx-cpu==${MLX_VERSION}" \
+    && .venv/bin/python -c "import mlx.core as mx; mx.eval(mx.linalg.det(mx.eye(2), stream=mx.cpu))"
+
 # per-node state (pid, logs, downloaded models) lives here; mount a volume per node
 ENV EXO_HOME=/data
 VOLUME /data
 
 # 52413/udp discovery, 52414/tcp zenoh, 52415/tcp API
 EXPOSE 52413/udp 52414/tcp 52415/tcp
-ENTRYPOINT ["uv", "run", "exo"]
+# --no-sync: plain `uv run` re-syncs to uv.lock on every start, undoing the mlx override above
+ENTRYPOINT ["uv", "run", "--no-sync", "exo"]
