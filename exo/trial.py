@@ -249,6 +249,32 @@ def node_cpusets(n: int) -> list:
     return sets
 
 
+def master_node(n: int) -> int | None:
+    """Which node is master right now, from the nodes' own logs: the master logs
+    "Node elected Master - maintaining/promoting self", followers "Node <id> elected master".
+    exo exposes no API for it. The role moves with every election (a cluster restart, a
+    master loss), so it is read per trial. None if no node's log says so."""
+    masters = []
+    for i in range(n):
+        out = subprocess.run(["podman", "logs", "--tail", "5000", f"exo-{i}"], capture_output=True, text=True)
+        lines = [l for l in (out.stdout + out.stderr).splitlines() if "elected" in l]
+        if lines and "Node elected Master" in lines[-1]:
+            masters.append(i)
+    return masters[-1] if len(masters) == 1 else None
+
+
+def node_ids(n: int) -> list:
+    """Each node's NodeId from its own API (cluster.sh publishes node i on 52415+i), so
+    records can be matched to log lines, which name nodes by id. None where unreachable."""
+    ids = []
+    for i in range(n):
+        try:
+            ids.append(api(f"http://localhost:{52415 + i}", "/node_id", timeout=3))
+        except Exception:
+            ids.append(None)
+    return ids
+
+
 def inject(mode: str, node: int) -> float:
     out = subprocess.run([str(HERE / "cluster.sh"), mode, str(node)], capture_output=True, text=True, check=True)
     return float(out.stdout.strip().splitlines()[0])
@@ -303,6 +329,11 @@ def main() -> None:
     rec: dict = dict(label=args.label, model=MODEL, nodes=args.nodes, fail_node=args.fail_node,
                      mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
                      host_time=now(), cpusets=node_cpusets(args.nodes))
+
+    if args.mode != "none":  # which role the failed node had: worker loss and master loss differ
+        rec.update(master_node=master_node(args.nodes), master_source="podman logs", node_ids=node_ids(args.nodes))
+        role = "master" if rec["master_node"] == args.fail_node else "worker" if rec["master_node"] is not None else "unknown role"
+        log(f"master is node {rec['master_node']}; failing node {args.fail_node} ({role})")
 
     clear_instances(base)
     placed = place_and_wait(base, args.nodes)

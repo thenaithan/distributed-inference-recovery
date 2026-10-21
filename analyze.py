@@ -170,7 +170,9 @@ def main():
     rows = [json.loads(l) for l in open(args.path) if l.strip()]
     by_mode: dict = {}
     for r in rows:
-        by_mode.setdefault(r.get("mode"), []).append(r)
+        # master loss takes a different path (election) from worker loss: keep them apart
+        key = r.get("mode") + ("-master" if r.get("master_node") is not None and r.get("master_node") == r.get("fail_node") else "")
+        by_mode.setdefault(key, []).append(r)
     allP = {}
     for mode, rs in by_mode.items():
         allP[mode] = summarize(rs, f"{args.path}  mode={mode}")
