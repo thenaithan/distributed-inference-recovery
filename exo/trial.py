@@ -36,6 +36,11 @@ import urllib.request
 
 HERE = Path(__file__).resolve().parent
 MODEL = "mlx-community/Qwen3-0.6B-8bit"
+# exo keeps the SSE stream open with ": keep-alive" every 10 s while nothing happens, so a
+# socket timeout never fires. Give up when no token has arrived for this long instead: well
+# above exo's own stall detection (RUNNER_STALL_TIMEOUT 90 s), so it never pre-empts what we
+# measure. Such trials end with end_kind "harness_timeout" = exo did not end the stream.
+STALL_TIMEOUT = 300.0
 PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rivers, one per line."
 
 
@@ -132,17 +137,21 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
                        "check ./cluster.sh logs 0")
 
 
-def stream(base: str, on_token, max_tokens: int = 400):
+def stream(base: str, on_token, max_tokens: int = 400, stall_timeout: float = STALL_TIMEOUT):
     """Run a streaming chat completion; call on_token(index, t) per content chunk.
-    Returns (n_tokens, t_end, end_kind, last_payload)."""
+    Returns (n_tokens, t_end, end_kind, last_payload). Ends with "harness_timeout" when no
+    token arrives for stall_timeout seconds (counted from the request until the first)."""
     body = {"model": MODEL, "stream": True, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": PROMPT}]}
     req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     n, last = 0, None
+    t_progress = now()
     try:
-        with urllib.request.urlopen(req, timeout=600) as r:
+        with urllib.request.urlopen(req, timeout=stall_timeout) as r:
             for raw in r:
+                if now() - t_progress > stall_timeout:
+                    return n, now(), "harness_timeout", last
                 if not raw.startswith(b"data:"):
                     continue
                 payload = raw[5:].strip()
@@ -159,10 +168,13 @@ def stream(base: str, on_token, max_tokens: int = 400):
                 if choices and (choices[0].get("delta", {}).get("content") or choices[0].get("finish_reason")):
                     if choices[0].get("delta", {}).get("content"):
                         n += 1
-                        on_token(n, now())
+                        t_progress = now()
+                        on_token(n, t_progress)
                     if choices[0].get("finish_reason"):
                         return n, now(), "finish_reason", obj
-    except Exception as e:  # connection dropped, HTTP error, timeout
+    except TimeoutError:  # not a byte, not even a keep-alive, for stall_timeout
+        return n, now(), "harness_timeout", last
+    except Exception as e:  # connection dropped, HTTP error
         return n, now(), f"exception:{type(e).__name__}", {"message": str(e)}
     return n, now(), "eof", last
 
@@ -191,11 +203,14 @@ def main() -> None:
     ap.add_argument("--at-token", type=int, default=40)
     ap.add_argument("--out", default="trials.jsonl")
     ap.add_argument("--label", default="")
+    ap.add_argument("--stall-timeout", type=float, default=STALL_TIMEOUT,
+                    help="end the stream after this many seconds without a token")
     args = ap.parse_args()
     base = args.base
 
     rec: dict = dict(label=args.label, model=MODEL, nodes=args.nodes, fail_node=args.fail_node,
-                     mode=args.mode, at_token=args.at_token, host_time=now())
+                     mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
+                     host_time=now())
 
     placed = place_and_wait(base, args.nodes)
     rec.update(placed)
@@ -210,7 +225,7 @@ def main() -> None:
             state["injected"] = inject(args.mode, args.fail_node)
 
     t_req = now()
-    n, t_end, kind, last = stream(base, on_token)
+    n, t_end, kind, last = stream(base, on_token, stall_timeout=args.stall_timeout)
     rec.update(t_request=t_req, tokens_before_end=n, t_first_token=tokens[0] if tokens else None,
                t_fail=state["injected"], t_stream_end=t_end, end_kind=kind,
                t_last_token=tokens[-1] if tokens else None,
@@ -225,7 +240,8 @@ def main() -> None:
             re = place_and_wait(base, survivors)
             rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"], t_replaced=re["t_placed"], t_replace_ready=re["t_ready"])
             first = {}
-            n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=20)
+            n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=20,
+                                      stall_timeout=args.stall_timeout)
             rec.update(t_resubmit_first_token=first.get("t"), resubmit_end_kind=kind2)
         except Exception as e:
             rec["recover_error"] = f"{type(e).__name__}: {e}"

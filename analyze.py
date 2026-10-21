@@ -35,6 +35,12 @@ def pick(rec, *keys):
     return None
 
 
+def detected(rec):
+    """The system ended the stream after the failure. "harness_timeout" means the trial
+    harness gave up first: not detected within its stall timeout, not a detection time."""
+    return bool(rec.get("t_fail")) and rec.get("end_kind") != "harness_timeout"
+
+
 def summarize(rows, label):
     def col(f):
         vals = [f(r) for r in rows]
@@ -43,7 +49,11 @@ def summarize(rows, label):
             return "   -   "
         return f"{st.median(vals):6.1f} ({min(vals):.1f}–{max(vals):.1f}, n={len(vals)})"
     print(f"\n{label}  [median (min–max, n)] seconds after failure")
-    print("  detect  ", col(lambda r: r["t_stream_end"] - r["t_fail"] if r.get("t_fail") else None))
+    print("  detect  ", col(lambda r: r["t_stream_end"] - r["t_fail"] if detected(r) else None))
+    undetected = [r for r in rows if r.get("t_fail") and not detected(r)]
+    if undetected:
+        print(f"  not detected within the harness stall timeout: {len(undetected)} "
+              f"(stall_timeout {sorted({r.get('stall_timeout') for r in undetected}, key=str)})")
     print("  gone    ", col(lambda r: (pick(r, "t_instance_gone", "t_server_exit") - r["t_fail"])
                             if r.get("t_fail") and pick(r, "t_instance_gone", "t_server_exit") else None))
     print("  recover ", col(lambda r: (pick(r, "t_replace_ready", "t_ready_again") - r["t_fail"])
@@ -71,14 +81,14 @@ def main(path):
     print("\nchurnsim parameters (median over kill trials):")
     kills = by_mode.get("kill", [])
     if kills:
-        detect = st.median([r["t_stream_end"] - r["t_fail"] for r in kills if r.get("t_fail")])
+        detect = st.median([r["t_stream_end"] - r["t_fail"] for r in kills if detected(r)] or [float("nan")])
         C = [r["t_resubmit_first_token"] - r["t_fail"] for r in kills if r.get("t_fail") and r.get("t_resubmit_first_token")]
         print(f"  detect_time = {detect:.1f}")
         if C:
             print(f"  reconnect_time (restart, incl. relaunch) = {st.median(C):.1f}")
     pauses = by_mode.get("pause", [])
     if pauses:
-        detect = st.median([r["t_stream_end"] - r["t_fail"] for r in pauses if r.get("t_fail")])
+        detect = st.median([r["t_stream_end"] - r["t_fail"] for r in pauses if detected(r)] or [float("nan")])
         print(f"  detect_time (silent hang) = {detect:.1f}")
 
 
