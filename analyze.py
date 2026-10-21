@@ -61,13 +61,24 @@ def detected(rec):
     return bool(rec.get("t_fail")) and rec.get("end_kind") != "harness_timeout"
 
 
+# exo's runner states in order; a phase ends when every runner is at or past its end state,
+# so a state the 0.25 s poll never sampled (RunnerLoaded lasts ~1 s) does not lose the phase.
+RUNNER_ORDER = ["RunnerIdle", "RunnerConnecting", "RunnerConnected", "RunnerLoading",
+                "RunnerLoaded", "RunnerWarmingUp", "RunnerReady", "RunnerRunning"]
+
+
+def at_or_past(status, end_status):
+    return status in RUNNER_ORDER and RUNNER_ORDER.index(status) >= RUNNER_ORDER.index(end_status)
+
+
 def phase(timeline, start_status, end_status):
     """Seconds between the first time any runner shows start_status and the first time
-    all runners show end_status, from a [[t, {rid: status}], ...] timeline. None if absent."""
+    all runners are at or past end_status, from a [[t, {rid: status}], ...] timeline.
+    None if absent."""
     if not timeline:
         return None
     t_start = next((t for t, s in timeline if start_status in s.values()), None)
-    t_end = next((t for t, s in timeline if s and all(v == end_status for v in s.values())), None)
+    t_end = next((t for t, s in timeline if s and all(at_or_past(v, end_status) for v in s.values())), None)
     if t_start is None or t_end is None or t_end < t_start:
         return None
     return t_end - t_start
@@ -115,7 +126,8 @@ def summarize(rows, label):
     toks = [p["prompt_tokens"] for p in P if p["prompt_tokens"]]
     dec = [p["decode_s_per_tok"] for p in P if p["decode_s_per_tok"]]
     if toks:
-        print(f"  prefill tokens: {st.median(toks):.0f};  warmup tokens: {P[0]['warmup_tokens']}")
+        wt = next((p["warmup_tokens"] for p in P if p["warmup_tokens"]), None)
+        print(f"  prefill tokens: {st.median(toks):.0f};  warmup tokens: {wt}")
     if dec:
         print(f"  steady decode: {st.median(dec):.2f} s/token (median of per-trial medians)")
     kinds: dict = {}
