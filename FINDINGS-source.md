@@ -53,9 +53,10 @@ parallel the master's 1 s plan loop emits `NodeTimedOut` after 15 s of silence a
 orphaned runners (`plan.py:76-79`). **Nothing re-places the instance**: `PlaceInstance`
 is only ever issued from API handlers (`api/main.py:484, 534, 599`). A rejoining node
 gets a fresh random `NodeId` (`router.py:256`). A new placement runs CreateRunner →
-ConnectToGroup → LoadModel (weights from disk) → Warmup (`plan.py:57-68`) with a 400 s
-initialise timeout (`supervisor.py:216`) and up to 5 attempts with 0.5 s to 10 s backoff
-(`worker/main.py:114-117`, `constants.py:114`). KV lives in the runner process
+ConnectToGroup → LoadModel (weights from disk) → Warmup (`plan.py:57-68`), up to 5
+attempts with 0.5 s to 10 s backoff (`worker/main.py:114-117`, `constants.py:114`). The
+supervisor is created with an `initialize_timeout` of 400 s (`supervisor.py:216`), but
+nothing reads it: a placement whose ranks never connect has no timeout (see below). KV lives in the runner process
 (`engines/mlx/cache.py:244-256`) and dies with it.
 
 **Master loss:** zenoh `Expired` or 30 s heartbeat silence → 3 s election → the new
@@ -66,13 +67,36 @@ in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 **Client retry:** the API resends a `TextGeneration` command that was never accepted at
 10, 15 and 30 s (`api/main.py:236`); an accepted-then-failed generation is not retried.
 
-**Two things found while running it (NOTES-2026-10-21.md):** the API sends an SSE
+**Three things found while running it (NOTES-2026-10-21.md):** the API sends an SSE
 `: keep-alive` every 10 s while nothing happens (`api/keepalive.py`), so a client cannot
 detect a failure by socket timeout; detection is token-based and the client's effective
 detection time is whatever the server's own detector takes to emit the error chunk.
 And the 90 s stall detector (`supervisor.py` `_stuck()`) runs only on rank 0 with a
 generation in progress, and its timer is reset by **any** runner event, not only tokens;
 whether a paused peer leaves it un-reset is a prediction the pause trials test.
+
+The third is a deadlock in placement, hit twice in the 26 placements of 2026-10-21's 13
+kill trials (once placing fresh on 3 nodes, once re-placing on the 2 survivors), and each
+time every later placement wedged too until the cluster was recreated. The ranks of an
+instance connect in order: every rank but the last calls `mx.distributed.init` as soon as
+the runners exist, and the last rank is told to connect only once the state shows every
+other runner as `RunnerConnecting` (`worker/plan.py:200-209`). A runner reports
+`RunnerConnecting`, acknowledges the task, then blocks in `init` until all peers are in
+(`runner/runner.py:237-247`, `engines/mlx/utils_mlx.py:121`). Both messages leave the
+runner through a `multiprocessing.Queue` (`utils/channels.py:231`), whose `put` is
+completed by a feeder thread that needs the GIL, and MLX's `init` binding holds the GIL
+(mlx v0.32.0 `python/src/distributed.cpp:77`, no `gil_scoped_release`). When `init` gets
+the GIL first, both messages stay inside the process: the state keeps the runner at
+`RunnerIdle`, the last rank is never told to connect, and `init` never returns. Nothing
+times out: `initialize_timeout` is unused and the 90 s stall detector needs a generation
+in progress. The node's worker is meanwhile blocked in `start_task` waiting for the
+acknowledgement (`supervisor.py:286-316`), so it stops acting on the cluster state at
+all, including the `Shutdown` sent when the instance is deleted; later placements that
+include the node wedge the same way, and only restarting its process clears it. Log
+signature: the stuck node logs `runner connecting` and `Starting initialization for rank
+N` but never `initialization complete`; the last rank's node logs `runner created` and
+nothing more. The harness fails such a placement after 90 s (`CONNECT_TIMEOUT`). The GIL
+explanation fits every observation; a thread dump of a stuck runner would make it certain.
 
 **Measurement hooks:** events `NodeTimedOut`, `InstanceDeleted`, `RunnerStatusUpdated`,
 `TaskFailed`, `ChunkGenerated`/`ErrorChunk` (`shared/types/events.py:36-109`), stamped by
