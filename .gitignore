@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.jsonl
 vllm-serve.log
+exo/logs/

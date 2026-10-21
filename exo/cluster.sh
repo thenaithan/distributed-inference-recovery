@@ -20,6 +20,9 @@
 set -euo pipefail
 
 NET=exo-net
+# Node logs as plain files next to the trial records (gitignored), so they can be read
+# without journalctl and kept with the trials. `cluster.sh logs <i>` still works.
+LOGDIR=$(cd "$(dirname "$0")" && pwd)/logs
 IMG=exo-node
 NS=${EXO_NAMESPACE:-exp3}
 N_DEFAULT=3
@@ -69,7 +72,9 @@ case "$cmd" in
       # /tmp on tmpfs: MLX's CPU backend JIT-compiles kernels to /tmp/mlx/<ver>/cpu with
       # names up to 252 bytes, which the overlay /tmp can refuse ("File name too long")
       # depending on the host filesystem. exec, since MLX dlopens what it compiles there.
+      mkdir -p "$LOGDIR"
       podman run -d --name "exo-$i" --network "$NET" \
+        --log-driver k8s-file --log-opt "path=$LOGDIR/exo-$i.log" \
         --tmpfs /tmp:rw,exec,mode=1777 \
         $( [ "${#CPUSETS[@]}" -gt 0 ] && echo "--cpuset-cpus ${CPUSETS[$i]}" ) \
         -v "exo-data-$i:/data" \
