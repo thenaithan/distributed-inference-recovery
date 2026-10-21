@@ -90,7 +90,7 @@ case "$cmd" in
   down)
     # Keep this cluster's logs under a dated name before the containers go: podman owns
     # exo-<i>.log and may remove it with the container, and the next cluster starts afresh.
-    stamp=$(date +%Y%m%d-%H%M%S)
+    stamp=$(LC_ALL=C date +%Y%m%d-%H%M%S)  # C locale: a Buddhist-era locale stamped the year 2569
     for f in "$LOGDIR"/exo-[0-9]*.log; do
       [ -f "$f" ] && mv "$f" "${f%.log}.$stamp.log" && echo "kept $(basename "${f%.log}.$stamp.log")"
     done
