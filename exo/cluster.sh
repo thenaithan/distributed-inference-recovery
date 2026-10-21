@@ -88,6 +88,12 @@ case "$cmd" in
     echo "API of node i on http://localhost:<52415+i> (node 0: 52415, node 1: 52416, ...)"
     ;;
   down)
+    # Keep this cluster's logs under a dated name before the containers go: podman owns
+    # exo-<i>.log and may remove it with the container, and the next cluster starts afresh.
+    stamp=$(date +%Y%m%d-%H%M%S)
+    for f in "$LOGDIR"/exo-[0-9]*.log; do
+      [ -f "$f" ] && mv "$f" "${f%.log}.$stamp.log" && echo "kept $(basename "${f%.log}.$stamp.log")"
+    done
     for c in $(podman ps -a --format '{{.Names}}' | grep '^exo-' || true); do podman rm -f "$c" >/dev/null; done
     echo "cluster removed (volumes kept; podman volume rm exo-data-* to drop models)"
     ;;
