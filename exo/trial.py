@@ -110,16 +110,47 @@ def tag(wrapped) -> tuple[str | None, dict]:
     return None, {}
 
 
-def find_instance(st: dict) -> tuple[str, dict] | None:
+def model_instances(st: dict) -> dict:
+    """{instance_id: unwrapped instance} for every instance of MODEL in a /state payload."""
+    out = {}
     for instance_id, wrapped in st.get("instances", {}).items():
         inst = tag(wrapped)[1]
         if inst.get("shardAssignments", {}).get("modelId") == MODEL:
+            out[instance_id] = inst
+    return out
+
+
+def find_instance(st: dict, exclude: set = frozenset()) -> tuple[str, dict] | None:
+    """The instance of MODEL this trial placed: the one not present before placement."""
+    for instance_id, inst in model_instances(st).items():
+        if instance_id not in exclude:
             return instance_id, inst
     return None
 
 
+def clear_instances(base: str, timeout: float = 120.0) -> int:
+    """Delete every instance of MODEL and wait until exo has dropped them. Each trial must
+    start with none: a previous trial's recovery instance (or a smoke test's) would otherwise
+    be found first, and exo might route the request to it, so the failure would miss."""
+    st = api(base, "/state")
+    leftover = set(model_instances(st))
+    for instance_id in leftover:
+        api(base, f"/instance/{instance_id}", method="DELETE")
+        log(f"deleting leftover instance {instance_id}")
+    deadline = now() + timeout
+    while leftover and now() < deadline:
+        time.sleep(0.5)
+        st = poll_state(base)
+        if st is not None:
+            leftover &= set(model_instances(st))
+    if leftover:
+        raise RuntimeError(f"instances still present after {timeout:.0f}s: {sorted(leftover)}")
+    return len(st.get("instances", {})) if st else 0
+
+
 def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
     t0 = now()
+    before = set(model_instances(api(base, "/state")))  # so a leftover is never mistaken for ours
     deadline = t0 + timeout
     t_try = place(base, min_nodes, deadline)
     t_cmd = now()
@@ -138,7 +169,7 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
         if st is None:
             time.sleep(0.5)
             continue
-        found = find_instance(st)
+        found = find_instance(st, exclude=before)
         if found:
             instance_id, inst = found
             runners = st.get("runners", {})
@@ -273,6 +304,7 @@ def main() -> None:
                      mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
                      host_time=now(), cpusets=node_cpusets(args.nodes))
 
+    clear_instances(base)
     placed = place_and_wait(base, args.nodes)
     rec.update({k: v for k, v in placed.items() if k != "status_timeline"},
                place_status_timeline=placed["status_timeline"])
