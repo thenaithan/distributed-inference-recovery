@@ -23,10 +23,10 @@ Per trial, seconds after the injected failure (t_fail) unless marked:
                 a request that is then restarted from scratch
 
 Token units: warmup = warmup_tokens decode tokens, prefill = prompt_tokens prefill tokens.
-With --regime, the hardware-dependent parts (load excluded, it is reported separately) are
-converted using per-token speeds DERIVED from the Frontier Red Team article's figures
-(STUDY.md §"The self-replicating AI article"); the hardware-independent parts (detect,
-gone, replace_wait) are kept as measured. This is a restatement under a stated
+With --regime, the warmup and prefill phases of C are replaced by warmup_tokens and
+prompt_tokens at per-token speeds DERIVED from the Frontier Red Team article's figures
+(STUDY.md §"The self-replicating AI article"); everything else in C (detect, waiting for
+the instance to be deleted, placement refusal, runner creation, load) is kept as measured. This is a restatement under a stated
 assumption, not a measurement.
 
 Mapping to churnsim: both systems are Strategy.RESTART. detect_time = detect;
@@ -90,7 +90,9 @@ def parts(r):
         prompt_tokens=(r.get("resubmit_usage") or r.get("usage") or {}).get("prompt_tokens"),
         warmup_tokens=r.get("warmup_tokens"),
     )
-    its = r.get("inter_token_s", [])[: max((r.get("at_token") or 10**9) - 2, 0)]
+    # steady decode: before the injection (skip the last interval), or all of a failure-free run
+    cut = None if r.get("mode") == "none" else max((r.get("at_token") or 10**9) - 2, 0)
+    its = r.get("inter_token_s", [])[:cut]
     out["decode_s_per_tok"] = st.median(its) if its else None
     return out
 
@@ -129,11 +131,13 @@ def restate(P, regime):
     print(f"\nrestated in regime '{regime}' ({R['note']}):")
     rows = []
     for p in P:
-        if p["C"] is None or not p["prompt_tokens"] or not p["warmup_tokens"]:
+        if None in (p["C"], p["warmup"], p["prefill"]) or not p["prompt_tokens"] or not p["warmup_tokens"]:
             continue
-        fixed = sum(x for x in (p["detect"], p["gone"] and 0, p["replace_wait"]) if x)  # gone overlaps detect
-        lo = fixed + (p["load"] or 0) + p["warmup_tokens"] * R["decode"][0] + p["prompt_tokens"] * R["prefill"][0]
-        hi = fixed + (p["load"] or 0) + p["warmup_tokens"] * R["decode"][1] + p["prompt_tokens"] * R["prefill"][1]
+        # Everything in C except warmup and prefill stays as measured: detection, waiting
+        # for the instance to be deleted, placement refusal, runner creation and load.
+        fixed = p["C"] - p["warmup"] - p["prefill"]
+        lo = fixed + p["warmup_tokens"] * R["decode"][0] + p["prompt_tokens"] * R["prefill"][0]
+        hi = fixed + p["warmup_tokens"] * R["decode"][1] + p["prompt_tokens"] * R["prefill"][1]
         rows.append((lo, hi))
     if not rows:
         print("  (no complete trials)")
@@ -141,8 +145,9 @@ def restate(P, regime):
     lo = st.median([a for a, _ in rows]); hi = st.median([b for _, b in rows])
     print(f"  C ≈ {lo/60:.0f}–{hi/60:.0f} min for this prompt; "
           f"a 28k-token prefill alone would be {28000*R['prefill'][0]/3600:.1f}–{28000*R['prefill'][1]/3600:.1f} h")
-    print("  (timers as measured; load as measured on our CPU; warmup and prefill via the regime's "
-          "per-token speeds; assumption, not measurement)")
+    print("  (C as measured with its warmup and prefill phases replaced by the regime's per-token "
+          "speeds; the prefill of exo's short warmup prompt is left out, so slightly low; "
+          "assumption, not measurement)")
 
 
 def main():
