@@ -1,4 +1,4 @@
-# Study notes for Experiment 4
+# Study notes for Experiment 3
 
 What to read and in what order, and what we expect to find, written before any
 measurement so that the expectations can be checked rather than fitted.
@@ -7,7 +7,7 @@ measurement so that the expectations can be checked rather than fitted.
 
 `distributed-inference-resilience` fits one constant to a 2023 paper: $C$, the cost of
 one failure (detect it, find a replacement, rebuild state). Every threshold in that work
-is $1/(S C)$ or $(1-p)^{ST}$ with a restart cost per failure. Experiment 4 measures $C$
+is $1/(S C)$ or $(1-p)^{ST}$ with a restart cost per failure. Experiment 3 measures $C$
 and its parts on two systems people run today, exo and vLLM, under three ways of losing
 a node, and replaces the fitted constant with a measured distribution.
 
@@ -16,6 +16,53 @@ systems restart requests from scratch and restart nothing by themselves. So the
 measurement also answers "what does a failure cost a request on a current stack",
 which is the number the public conclusion's applicability section currently states
 from documentation only.
+
+## The self-replicating AI article
+
+Zhou and Freeman, "AI models may be capable of self-replicating without access to a
+datacenter", Anthropic Frontier Red Team, 2026-10-12
+(https://www.anthropic.com/research/self-replicating-ai). Read in full on 2026-10-21;
+figures not stated in the article are marked **derived** here and in NOTES-2026-10-21.md.
+
+The article argues that small models may soon self-replicate across commercial IoT
+devices, demonstrates Gemma4-26B-A4B pipeline-parallel over 15 Android TV boxes at
+0.39 tok/s, and chooses pipeline parallelism "for its fault-tolerant properties",
+citing Borzunov et al. 2022: a downed node can be replaced and its KV cache recomputed
+by a forward pass of the preceding node. Its defence section frames the problem as
+driving $R_0$ below 1 by quarantine.
+
+Why this study bears on it:
+
+- **Same mechanism, same source.** The fault-tolerance argument is Petals' Algorithm 1.
+  The article cites the 2022 demo paper (arXiv:2209.01188); the fault-tolerance
+  measurement is in the 2023 NeurIPS paper (arXiv:2312.08361), which is what the
+  resilience model is fitted to.
+- **Replacement is assumed, not costed.** The article measures neither $C$ nor churn.
+  Its window times (27 to 32 h for the 26B model, derived) assume no box drops out for
+  days, on devices that are unplugged and restarted daily. FINDINGS-source.md adds that
+  today's stacks do not replace anything on their own; only Petals recovers in-request.
+- **Rebuilding KV is a prefill, and on that hardware it is slow.** Derived from the
+  article's App. C (a 32k window is ~28k prefill + 3.8 to 4.8k decode tokens, prefill
+  ~15× faster per token, window 27.3 to 31.8 h): decode ≈ 15 to 20 s/token, prefill
+  ≈ 1.0 to 1.35 s/token on the TV-box swarm. Recomputing KV for a late-window context
+  is a prefill of up to 7.6 to 10.5 h inside a 27 to 32 h window. **Hypothesis**: in
+  that regime $C$ is hours, and the $(1-p)^{ST}$ and $1/(SC)$ terms decide whether a
+  window completes at all. This is what the measurement, restated in that regime,
+  tests.
+- **Quarantine is churn imposed by defenders.** With measured $C$ the model gives the
+  removal rate at which a pipeline-parallel replica stops completing windows, a direct
+  input to the article's $R_0$.
+
+How our setup relates to theirs: short-context decode speed is similar (2.5 to 2.9
+s/token here vs ≈ 2.6 there), prefill/decode ratio is not (≈ 1 here because MLX's CPU
+loops do not amortise weight reads over a batch; ≈ 15 there), and our network is
+near-ideal. So what carries over is counts: detection and orchestration in seconds
+(timer-governed, hardware-independent), warmup and prefill in tokens, converted with
+the article's per-token speeds. `analyze.py --regime` does the conversion and labels it
+as an assumption.
+
+**Scope.** Measure and model. Do not build the automatic re-placement that exo lacks;
+that is the piece a replicator would need, and it is not ours to supply.
 
 ## Three failure modes, and why all three
 
@@ -33,14 +80,20 @@ sockets, which is what a laptop going to sleep does, is the `pause` case.
 
 ## Predictions, from the source, to be checked
 
-exo, worker killed at token 40 of a 3-node pipeline:
+exo, worker killed after 5 output tokens of a 3-node pipeline (30 requested):
 
 - detect: 5 s poll granularity, so 0 to 5 s after the ring error, which itself follows
   the next activation send (one token). Expect 1 to 6 s.
 - gone: `InstanceDeleted` at 15 s node silence plus up to 1 s plan tick. Expect 15 to 17 s.
-- recover: re-placement over two nodes, weights reloaded from disk for a 0.6B 8-bit
-  model on CPU. Expect tens of seconds; this is the term we have no source number for.
-- C: recover plus prefill of the prompt. Expect 30 to 90 s.
+- replace_wait: placement is refused (400) until the master has dropped the node, so
+  up to ~15 s after the failure, less whatever `gone` already consumed.
+- recover: re-placement over two nodes. From the plumbing runs: load ~1 s, warmup
+  ~150 s (50 decode tokens at ~2.9 s), so expect 150 to 200 s on this CPU; in tokens,
+  50 decode tokens.
+- prefill: ~70 s for the 29-token prompt here, i.e. ~2.5 s/token; in tokens, 29.
+- C: 250 to 300 s on this CPU, dominated by warmup and prefill; restated in the
+  article's regime (`--regime tvbox-26b`) the same trial is 13 to 17 min for this
+  prompt, and a 28k-token prefill alone 7.6 to 10.5 h.
 
 exo, worker paused: detect should jump to 90 s (`RUNNER_STALL_TIMEOUT`) unless the
 ring layer's own TCP keepalive fires first; gone stays at ~15 s because the paused
@@ -91,6 +144,7 @@ Both harnesses run on one Linux machine, no GPU, and write one JSON line per tri
 parameters. Expect to run each (system, mode) ten times; the distributions matter more
 than the medians because detection is bimodal.
 
-The sandbox this was written in cannot run either system (no model downloads), so
-neither harness has been executed yet. Run `--mode none` first on each to check the
-plumbing before injecting failures.
+The authoring sandbox cannot run either system (no model downloads), so harness changes
+are checked against stub servers and synthetic records there and executed on the trial
+machine. Run `--mode none` first after any harness change. The exo plumbing check
+passed on 2026-10-21 (NOTES-2026-10-21.md); vLLM has not been run.

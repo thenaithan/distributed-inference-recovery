@@ -1,6 +1,6 @@
 # distributed-inference-recovery
 
-Experiment 4 of the distributed-inference resilience work: measure what one node
+Experiment 3 of the distributed-inference resilience work: measure what one node
 failure costs a request on systems people run today, and feed the measured constant
 back into the model in
 [distributed-inference-resilience](https://github.com/thenaithan/distributed-inference-resilience).
@@ -14,7 +14,9 @@ a clean crash, a silent hang, and a network partition.
 
 - `FINDINGS-source.md` – what exo and vLLM do on node loss, read from source with
   file:line, and what it means for the model before any measurement. Start here.
-- `STUDY.md` – predictions written before measuring, reading list, how to run.
+- `STUDY.md` – framing (incl. the Frontier Red Team self-replication article),
+  predictions written before measuring, reading list, how to run.
+- `DECISIONS-2026-10-21.md` – decisions on the open points and the task list.
 - `exo/` – `Containerfile`, `cluster.sh` (N nodes in rootless Podman on an IPv6 network),
   `trial.py` (place, stream, inject failure, time recovery).
 - `vllm/` – `trial.py` (serve with `-pp 2` on CPU, stream, kill or pause a worker, time
@@ -36,25 +38,26 @@ exo (needs Podman with IPv6 networking; first build downloads the model per node
 podman build -t exo-node -f exo/Containerfile exo
 exo/cluster.sh up 3
 python3 exo/trial.py --nodes 3 --mode none                     # plumbing check
-python3 exo/trial.py --nodes 3 --fail-node 1 --mode kill  --at-token 40 --out exo/trials.jsonl
+python3 exo/trial.py --nodes 3 --fail-node 1 --mode kill  --out exo/trials.jsonl   # injects after 5 tokens, 30 requested
 exo/cluster.sh up 3                                             # restart the killed node
-python3 exo/trial.py --nodes 3 --fail-node 1 --mode pause --at-token 40 --out exo/trials.jsonl
-python3 analyze.py exo/trials.jsonl
+python3 exo/trial.py --nodes 3 --fail-node 1 --mode pause --out exo/trials.jsonl
+python3 analyze.py exo/trials.jsonl --regime tvbox-26b
 ```
 
 vLLM (a venv with `vllm` installed; CPU backend):
 
 ```
 python3 vllm/trial.py --mode none
-python3 vllm/trial.py --mode kill  --at-token 40 --out vllm/trials.jsonl
-python3 vllm/trial.py --mode pause --at-token 40 --out vllm/trials.jsonl
+python3 vllm/trial.py --mode kill  --at-token 5 --out vllm/trials.jsonl
+python3 vllm/trial.py --mode pause --at-token 5 --out vllm/trials.jsonl
 python3 analyze.py vllm/trials.jsonl
 ```
 
 ## Status
 
 - [x] failure paths and constants read from source (exo bc412e2, vLLM 8407bc0)
-- [x] harnesses written; not yet run (the authoring environment cannot download models)
-- [ ] plumbing check on both
+- [x] harnesses written
+- [x] exo plumbing check (2026-10-21); image fixes for exo's mlx-cpu pairing and MLX's JIT path
+- [ ] vLLM plumbing check
 - [ ] 10 trials per (system, mode)
 - [ ] measured $C$ into the resilience model; update its applicability section

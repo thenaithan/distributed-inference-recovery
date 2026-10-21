@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """One failure trial against a running exo cluster: measure C and its parts.
 
-    python3 trial.py --nodes 3 --fail-node 1 --mode kill --at-token 40 --out trials.jsonl
+    python3 trial.py --nodes 3 --fail-node 1 --mode kill --out trials.jsonl
+    (defaults: inject after 5 output tokens, request 30; C does not depend on where the
+     failure lands, and on CPU every token costs seconds)
 
 What it does, with wall-clock timestamps on every step (time.time(), one host, one clock):
 
@@ -49,6 +51,8 @@ def now() -> float:
 
 
 PROGRESS_EVERY = 10  # tokens between progress lines
+USAGE: dict = {}     # last "usage" object seen on a stream (prompt_tokens, completion_tokens)
+WARMUP_TOKENS = 50   # exo's warmup decodes this many tokens before RunnerReady (runner logs)
 
 
 def log(msg: str) -> None:
@@ -126,6 +130,7 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
                 break
     t_placed = now()
     statuses: dict = {}
+    timeline: list = []  # [t, {runner_id: status}] on every change: load vs warmup split
     while now() < deadline:
         st = api(base, "/state")
         found = find_instance(st)
@@ -134,22 +139,25 @@ def place_and_wait(base: str, min_nodes: int, timeout: float = 600.0) -> dict:
             runners = st.get("runners", {})
             statuses = {rid: tag(runners.get(rid))[0]
                         for rid in inst.get("shardAssignments", {}).get("runnerToShard", {})}
+            if not timeline or timeline[-1][1] != statuses:
+                timeline.append([now(), dict(statuses)])
             for rid, status in statuses.items():
                 if status == "RunnerFailed":
                     raise RuntimeError(f"runner {rid} failed: {tag(runners[rid])[1]}")
             if statuses and all(s in READY for s in statuses.values()):
                 return dict(t_place_try=t_try, t_place_cmd=t_cmd, t_placed=t_placed, t_ready=now(),
-                            instance_id=instance_id)
-        time.sleep(0.5)
+                            instance_id=instance_id, status_timeline=timeline)
+        time.sleep(0.25)
     raise RuntimeError(f"instance not ready within timeout (runners: {statuses or 'no instance'}); "
                        "check ./cluster.sh logs 0")
 
 
-def stream(base: str, on_token, max_tokens: int = 400, stall_timeout: float = STALL_TIMEOUT):
+def stream(base: str, on_token, max_tokens: int = 30, stall_timeout: float = STALL_TIMEOUT):
     """Run a streaming chat completion; call on_token(index, t) per content chunk.
     Returns (n_tokens, t_end, end_kind, last_payload). Ends with "harness_timeout" when no
     token arrives for stall_timeout seconds (counted from the request until the first)."""
     body = {"model": MODEL, "stream": True, "max_tokens": max_tokens,
+            "stream_options": {"include_usage": True},
             "messages": [{"role": "user", "content": PROMPT}]}
     req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -169,6 +177,8 @@ def stream(base: str, on_token, max_tokens: int = 400, stall_timeout: float = ST
                     obj = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(obj, dict) and obj.get("usage"):
+                    USAGE.update(obj["usage"])  # prompt_tokens: the prefill size, in tokens
                 last = obj
                 if "error" in obj or obj.get("object") == "error":
                     return n, now(), "error_chunk", obj
@@ -218,7 +228,10 @@ def main() -> None:
     ap.add_argument("--nodes", type=int, default=3)
     ap.add_argument("--fail-node", type=int, default=1)
     ap.add_argument("--mode", choices=["kill", "pause", "cut", "none"], default="kill")
-    ap.add_argument("--at-token", type=int, default=40)
+    ap.add_argument("--at-token", type=int, default=5,
+                    help="inject after this many output tokens (early: C does not depend on it)")
+    ap.add_argument("--max-tokens", type=int, default=30,
+                    help="output tokens requested; on CPU each costs ~2.5 s")
     ap.add_argument("--out", default="trials.jsonl")
     ap.add_argument("--label", default="")
     ap.add_argument("--stall-timeout", type=float, default=STALL_TIMEOUT,
@@ -231,7 +244,8 @@ def main() -> None:
                      host_time=now(), cpusets=node_cpusets(args.nodes))
 
     placed = place_and_wait(base, args.nodes)
-    rec.update(placed)
+    rec.update({k: v for k, v in placed.items() if k != "status_timeline"},
+               place_status_timeline=placed["status_timeline"])
     instance_id = placed["instance_id"]
 
     tokens: list = []
@@ -249,8 +263,11 @@ def main() -> None:
 
     log(f"instance ready ({placed['t_ready'] - placed['t_place_try']:.0f}s); streaming")
     t_req = now()
-    n, t_end, kind, last = stream(base, on_token, stall_timeout=args.stall_timeout)
+    USAGE.clear()
+    n, t_end, kind, last = stream(base, on_token, max_tokens=args.max_tokens, stall_timeout=args.stall_timeout)
     rec.update(t_request=t_req, tokens_before_end=n, t_first_token=tokens[0] if tokens else None,
+               max_tokens=args.max_tokens, usage=dict(USAGE), prompt_chars=len(PROMPT),
+               warmup_tokens=WARMUP_TOKENS,
                t_fail=state["injected"], t_stream_end=t_end, end_kind=kind,
                t_last_token=tokens[-1] if tokens else None,
                inter_token_s=[round(b - a, 4) for a, b in zip(tokens, tokens[1:])],
@@ -262,11 +279,16 @@ def main() -> None:
         survivors = args.nodes - 1
         try:
             re = place_and_wait(base, survivors)
-            rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"], t_replaced=re["t_placed"], t_replace_ready=re["t_ready"])
+            rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"],
+                       t_replaced=re["t_placed"], t_replace_ready=re["t_ready"],
+                       replace_status_timeline=re["status_timeline"])
             first = {}
-            n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=20,
+            USAGE.clear()
+            t_resub = now()
+            n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=5,
                                       stall_timeout=args.stall_timeout)
-            rec.update(t_resubmit_first_token=first.get("t"), resubmit_end_kind=kind2)
+            rec.update(t_resubmit_request=t_resub, t_resubmit_first_token=first.get("t"),
+                       resubmit_end_kind=kind2, resubmit_usage=dict(USAGE))
         except Exception as e:
             rec["recover_error"] = f"{type(e).__name__}: {e}"
         # undo

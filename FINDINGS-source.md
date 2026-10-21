@@ -66,6 +66,14 @@ in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 **Client retry:** the API resends a `TextGeneration` command that was never accepted at
 10, 15 and 30 s (`api/main.py:236`); an accepted-then-failed generation is not retried.
 
+**Two things found while running it (NOTES-2026-10-21.md):** the API sends an SSE
+`: keep-alive` every 10 s while nothing happens (`api/keepalive.py`), so a client cannot
+detect a failure by socket timeout; detection is token-based and the client's effective
+detection time is whatever the server's own detector takes to emit the error chunk.
+And the 90 s stall detector (`supervisor.py` `_stuck()`) runs only on rank 0 with a
+generation in progress, and its timer is reset by **any** runner event, not only tokens;
+whether a paused peer leaves it un-reset is a prediction the pause trials test.
+
 **Measurement hooks:** events `NodeTimedOut`, `InstanceDeleted`, `RunnerStatusUpdated`,
 `TaskFailed`, `ChunkGenerated`/`ErrorChunk` (`shared/types/events.py:36-109`), stamped by
 the master (`master/main.py:693-695`), readable at `GET /events` (last 10 000) and
