@@ -349,28 +349,43 @@ def main() -> None:
     ap.add_argument("--label", default="")
     ap.add_argument("--stall-timeout", type=float, default=STALL_TIMEOUT,
                     help="end the stream after this many seconds without a token")
+    ap.add_argument("--fail-master", action="store_true",
+                    help="fail whichever node is master (overrides --fail-node; --base moves to a survivor if needed)")
     ap.add_argument("--allow-api-node", action="store_true",
                     help="fail the node whose API serves the stream (measures a connection drop, not detection)")
     args = ap.parse_args()
     base = args.base
+    if args.fail_master and args.mode == "none":
+        raise SystemExit("--fail-master needs a failure mode")
+
+    master = master_node(args.nodes) if args.mode != "none" else None
+    if args.fail_master:  # kill whichever node is master this time; it moves between restarts
+        if master is None:
+            raise SystemExit("--fail-master: could not tell which node is master from the node logs")
+        args.fail_node = master
+
     # The stream must come from a survivor: if the failed node is also the API node, the
     # stream ends by connection drop and 'detect' measures nothing about exo's detectors.
     # (For master loss: --base on a survivor, kill the master; detection is then the 30 s
     # heartbeat silence plus the election, as in trial 1.)
     api_node = (urllib.parse.urlsplit(base).port or 80) - 52415
+    survivor = f"http://localhost:{52415 + (args.fail_node + 1) % args.nodes}"
     if args.mode != "none" and api_node == args.fail_node and not args.allow_api_node:
-        raise SystemExit(f"--base is node {api_node}'s API and --fail-node is {args.fail_node}: the stream would die "
-                         f"by connection drop. Use --base http://localhost:{52415 + (args.fail_node + 1) % args.nodes} "
-                         f"(a survivor), or --allow-api-node to measure the drop on purpose.")
+        if not args.fail_master:
+            raise SystemExit(f"--base is node {api_node}'s API and --fail-node is {args.fail_node}: the stream would die "
+                             f"by connection drop. Use --base {survivor} (a survivor), or --allow-api-node to measure "
+                             f"the drop on purpose.")
+        base = survivor  # --fail-master picks the node; the stream follows it to a survivor
+        log(f"node {api_node} is the master and will be failed; streaming via {base} instead")
 
     rec: dict = dict(label=args.label, model=MODEL, nodes=args.nodes, fail_node=args.fail_node,
                      mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
-                     host_time=now(), cpusets=node_cpusets(args.nodes))
+                     host_time=now(), cpusets=node_cpusets(args.nodes), base=base)
 
     if args.mode != "none":  # which role the failed node had: worker loss and master loss differ
-        rec.update(master_node=master_node(args.nodes), master_source="podman logs", node_ids=node_ids(args.nodes))
-        role = "master" if rec["master_node"] == args.fail_node else "worker" if rec["master_node"] is not None else "unknown role"
-        log(f"master is node {rec['master_node']}; failing node {args.fail_node} ({role})")
+        rec.update(master_node=master, master_source="podman logs", node_ids=node_ids(args.nodes))
+        role = "master" if master == args.fail_node else "worker" if master is not None else "unknown role"
+        log(f"master is node {master}; failing node {args.fail_node} ({role})")
 
     clear_instances(base)
     placed = place_and_wait(base, args.nodes)

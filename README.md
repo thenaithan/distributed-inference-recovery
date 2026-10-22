@@ -41,7 +41,7 @@ python3 exo/trial.py --nodes 3 --mode none                     # plumbing check
 python3 exo/trial.py --nodes 3 --fail-node 1 --mode kill  --out exo/trials.jsonl   # injects after 5 tokens, 30 requested
 exo/cluster.sh up 3                                             # restart the killed node
 python3 exo/trial.py --nodes 3 --fail-node 1 --mode pause --out exo/trials.jsonl
-python3 exo/trial.py --nodes 3 --fail-node 0 --mode kill --base http://localhost:52416 --out exo/trials.jsonl  # master loss, via node 1
+python3 exo/trial.py --nodes 3 --fail-master --mode kill --out exo/trials.jsonl       # master loss: kills whichever node is master, streams via a survivor
 python3 analyze.py exo/trials.jsonl --regime tvbox-26b
 ```
 
