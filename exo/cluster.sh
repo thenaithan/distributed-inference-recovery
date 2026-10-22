@@ -65,8 +65,15 @@ case "$cmd" in
     ensure_net
     for i in $(seq 0 $((n-1))); do
       state=$(podman inspect -f '{{.State.Status}}' "exo-$i" 2>/dev/null || true)
-      if [ "$state" = running ] || [ "$state" = paused ]; then
-        echo "exo-$i already $state"; continue
+      if [ "$state" = paused ]; then  # left paused by an interrupted pause trial
+        podman unpause "exo-$i" >/dev/null; echo "resumed exo-$i"; continue
+      elif [ "$state" = running ]; then
+        if podman inspect -f '{{json .NetworkSettings.Networks}}' "exo-$i" | grep -q "\"$NET\""; then
+          echo "exo-$i already running"
+        else  # left cut by an interrupted cut trial
+          podman network connect "$NET" "exo-$i"; echo "reconnected exo-$i"
+        fi
+        continue
       elif [ -n "$state" ]; then  # killed or exited: restart the same container (fresh NodeId)
         podman start "exo-$i" >/dev/null; echo "restarted exo-$i"; continue
       fi
@@ -96,7 +103,10 @@ case "$cmd" in
     for f in "$LOGDIR"/exo-[0-9].log "$LOGDIR"/exo-[0-9][0-9].log; do  # live logs only, not kept ones
       [ -f "$f" ] && mv "$f" "${f%.log}.$stamp.log" && echo "kept $(basename "${f%.log}.$stamp.log")"
     done
-    for c in $(podman ps -a --format '{{.Names}}' | grep '^exo-' || true); do podman rm -f "$c" >/dev/null; done
+    for c in $(podman ps -a --format '{{.Names}}' | grep '^exo-' || true); do
+      podman unpause "$c" >/dev/null 2>&1 || true  # a paused container cannot be stopped
+      podman rm -f "$c" >/dev/null
+    done
     echo "cluster removed (volumes kept; podman volume rm exo-data-* to drop models)"
     ;;
   ip)     podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "exo-$arg" ;;
