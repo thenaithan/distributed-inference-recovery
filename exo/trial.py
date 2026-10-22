@@ -409,37 +409,38 @@ def main() -> None:
     log(f"instance ready ({placed['t_ready'] - placed['t_place_try']:.0f}s); streaming")
     t_req = now()
     USAGE.clear()
-    n, t_end, kind, last = stream(base, on_token, max_tokens=args.max_tokens, stall_timeout=args.stall_timeout)
-    rec.update(t_request=t_req, tokens_before_end=n, t_first_token=tokens[0] if tokens else None,
-               max_tokens=args.max_tokens, usage=dict(USAGE), prompt_chars=len(PROMPT),
-               warmup_tokens=WARMUP_TOKENS,
-               t_fail=state["injected"], t_stream_end=t_end, end_kind=kind,
-               t_last_token=tokens[-1] if tokens else None,
-               inter_token_s=[round(b - a, 4) for a, b in zip(tokens, tokens[1:])],
-               last_payload=last)
+    try:
+        n, t_end, kind, last = stream(base, on_token, max_tokens=args.max_tokens, stall_timeout=args.stall_timeout)
+        rec.update(t_request=t_req, tokens_before_end=n, t_first_token=tokens[0] if tokens else None,
+                   max_tokens=args.max_tokens, usage=dict(USAGE), prompt_chars=len(PROMPT),
+                   warmup_tokens=WARMUP_TOKENS,
+                   t_fail=state["injected"], t_stream_end=t_end, end_kind=kind,
+                   t_last_token=tokens[-1] if tokens else None,
+                   inter_token_s=[round(b - a, 4) for a, b in zip(tokens, tokens[1:])],
+                   last_payload=last)
 
-    if args.mode != "none":
-        rec["t_instance_gone"] = wait_instance_gone(base, instance_id)
-        # recover: re-place on the survivors and resubmit
-        survivors = args.nodes - 1
-        try:
-            re = place_and_wait(base, survivors)
-            rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"],
-                       t_replaced=re["t_placed"], t_replace_ready=re["t_ready"],
-                       replace_status_timeline=re["status_timeline"])
-            first = {}
-            USAGE.clear()
-            t_resub = now()
-            n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=5,
-                                      stall_timeout=args.stall_timeout)
-            rec.update(t_resubmit_request=t_resub, t_resubmit_first_token=first.get("t"),
-                       resubmit_end_kind=kind2, resubmit_usage=dict(USAGE))
-        except Exception as e:
-            rec["recover_error"] = f"{type(e).__name__}: {e}"
-        # undo
-        if args.mode == "pause":
+        if args.mode != "none":
+            rec["t_instance_gone"] = wait_instance_gone(base, instance_id)
+            # recover: re-place on the survivors and resubmit
+            survivors = args.nodes - 1
+            try:
+                re = place_and_wait(base, survivors)
+                rec.update(t_replace_try=re["t_place_try"], t_replace_cmd=re["t_place_cmd"],
+                           t_replaced=re["t_placed"], t_replace_ready=re["t_ready"],
+                           replace_status_timeline=re["status_timeline"])
+                first = {}
+                USAGE.clear()
+                t_resub = now()
+                n2, t_end2, kind2, _ = stream(base, lambda i, t: first.setdefault("t", t), max_tokens=5,
+                                          stall_timeout=args.stall_timeout)
+                rec.update(t_resubmit_request=t_resub, t_resubmit_first_token=first.get("t"),
+                           resubmit_end_kind=kind2, resubmit_usage=dict(USAGE))
+            except Exception as e:
+                rec["recover_error"] = f"{type(e).__name__}: {e}"
+    finally:  # undo the injection even on an error or Ctrl-C: a paused or cut node must not outlive the trial
+        if state["injected"] is not None and args.mode == "pause":
             inject("resume", args.fail_node)
-        elif args.mode == "cut":
+        elif state["injected"] is not None and args.mode == "cut":
             inject("heal", args.fail_node)
         # a killed container stays down; restart it with ./cluster.sh up before the next trial
 
