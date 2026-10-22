@@ -120,6 +120,11 @@ def summarize(rows, label):
     print(f"\n{label}   median (min–max, n)")
     for key in ("detect", "gone", "replace_wait", "load", "warmup", "place_to_ready", "prefill", "C"):
         print(f"  {key:<14}", fmt([p[key] for p in P]))
+    # Detection can be bimodal (master loss: a zenoh session expiry at ~3 s, or the 30 s
+    # heartbeat timeout), which a median hides; show the values while there are few.
+    det = sorted(p["detect"] for p in P if p["detect"] is not None)
+    if 1 < len(det) <= 12:
+        print("  detect values:  ", " ".join(f"{d:.1f}" for d in det))
     undetected = [r for r in rows if r.get("t_fail") and not detected(r)]
     if undetected:
         print(f"  not detected within the harness stall timeout: {len(undetected)}")
