@@ -349,26 +349,31 @@ def main() -> None:
     ap.add_argument("--label", default="")
     ap.add_argument("--stall-timeout", type=float, default=STALL_TIMEOUT,
                     help="end the stream after this many seconds without a token")
-    ap.add_argument("--fail-master", action="store_true",
-                    help="fail whichever node is master (overrides --fail-node; --base moves to a survivor if needed)")
+    who = ap.add_mutually_exclusive_group()
+    who.add_argument("--fail-master", action="store_true",
+                     help="fail whichever node is master (overrides --fail-node; --base moves to a survivor if needed)")
+    who.add_argument("--fail-worker", action="store_true",
+                     help="fail a node that is neither master nor the API node (overrides --fail-node)")
     ap.add_argument("--allow-api-node", action="store_true",
                     help="fail the node whose API serves the stream (measures a connection drop, not detection)")
     args = ap.parse_args()
     base = args.base
-    if args.fail_master and args.mode == "none":
-        raise SystemExit("--fail-master needs a failure mode")
+    if (args.fail_master or args.fail_worker) and args.mode == "none":
+        raise SystemExit("--fail-master/--fail-worker need a failure mode")
 
     master = master_node(args.nodes) if args.mode != "none" else None
-    if args.fail_master:  # kill whichever node is master this time; it moves between restarts
-        if master is None:
-            raise SystemExit("--fail-master: could not tell which node is master from the node logs")
+    api_node = (urllib.parse.urlsplit(base).port or 80) - 52415
+    if (args.fail_master or args.fail_worker) and master is None:
+        raise SystemExit("could not tell which node is master from the node logs")
+    if args.fail_master:  # fail whichever node is master this time; it moves between restarts
         args.fail_node = master
+    elif args.fail_worker:  # a node that is neither the master nor the one streaming to us
+        args.fail_node = next(i for i in range(args.nodes) if i not in (master, api_node))
 
     # The stream must come from a survivor: if the failed node is also the API node, the
     # stream ends by connection drop and 'detect' measures nothing about exo's detectors.
     # (For master loss: --base on a survivor, kill the master; detection is then the 30 s
     # heartbeat silence plus the election, as in trial 1.)
-    api_node = (urllib.parse.urlsplit(base).port or 80) - 52415
     survivor = f"http://localhost:{52415 + (args.fail_node + 1) % args.nodes}"
     if args.mode != "none" and api_node == args.fail_node and not args.allow_api_node:
         if not args.fail_master:
