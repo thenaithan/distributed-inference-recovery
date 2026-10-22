@@ -22,7 +22,9 @@ set -euo pipefail
 NET=exo-net
 # Node logs as plain files next to the trial records (gitignored), so they can be read
 # without journalctl and kept with the trials. `cluster.sh logs <i>` still works.
-LOGDIR=$(cd "$(dirname "$0")" && pwd)/logs
+# With a remote podman (CONTAINER_HOST set) the path is interpreted on the podman host, so
+# set EXO_LOGDIR to this directory's path as the host sees it.
+LOGDIR=${EXO_LOGDIR:-$(cd "$(dirname "$0")" && pwd)/logs}
 IMG=exo-node
 NS=${EXO_NAMESPACE:-exp3}
 N_DEFAULT=3
