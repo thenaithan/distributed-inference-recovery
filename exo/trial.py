@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -348,8 +349,19 @@ def main() -> None:
     ap.add_argument("--label", default="")
     ap.add_argument("--stall-timeout", type=float, default=STALL_TIMEOUT,
                     help="end the stream after this many seconds without a token")
+    ap.add_argument("--allow-api-node", action="store_true",
+                    help="fail the node whose API serves the stream (measures a connection drop, not detection)")
     args = ap.parse_args()
     base = args.base
+    # The stream must come from a survivor: if the failed node is also the API node, the
+    # stream ends by connection drop and 'detect' measures nothing about exo's detectors.
+    # (For master loss: --base on a survivor, kill the master; detection is then the 30 s
+    # heartbeat silence plus the election, as in trial 1.)
+    api_node = (urllib.parse.urlsplit(base).port or 80) - 52415
+    if args.mode != "none" and api_node == args.fail_node and not args.allow_api_node:
+        raise SystemExit(f"--base is node {api_node}'s API and --fail-node is {args.fail_node}: the stream would die "
+                         f"by connection drop. Use --base http://localhost:{52415 + (args.fail_node + 1) % args.nodes} "
+                         f"(a survivor), or --allow-api-node to measure the drop on purpose.")
 
     rec: dict = dict(label=args.label, model=MODEL, nodes=args.nodes, fail_node=args.fail_node,
                      mode=args.mode, at_token=args.at_token, stall_timeout=args.stall_timeout,
