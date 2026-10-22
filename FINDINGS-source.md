@@ -60,7 +60,13 @@ nothing reads it: a placement whose ranks never connect has no timeout (see belo
 (`engines/mlx/cache.py:244-256`) and dies with it.
 
 **Master loss:** zenoh `Expired` or 30 s heartbeat silence → 3 s election → the new
-master drops all generation tasks (`master/main.py:173-187`); the API ends every
+master drops all generation tasks (`master/main.py:173-187`). Which of the two fires is
+not deterministic: exo's own comment says the liveliness token of a crashed node "can
+be seen indefinitely" by the others in a cluster of three or more (`election.py:24-27`),
+so the 30 s timeout is the backstop; a `Connection` message (`election.py:300-318`) starts
+the election 0.2 s after the expiry when it does fire. Measured 2026-10-22: 3 of 9 master
+kills detected in 3.3 s, 6 in 30–33 s, and in the slow ones no expiry was logged within
+400 s; the API ends every
 in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 346-356`). Instances survive a master change; requests do not.
 
