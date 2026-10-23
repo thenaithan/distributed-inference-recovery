@@ -78,8 +78,11 @@ in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 detect a failure by socket timeout; detection is token-based and the client's effective
 detection time is whatever the server's own detector takes to emit the error chunk.
 And the 90 s stall detector (`supervisor.py` `_stuck()`) runs only on rank 0 with a
-generation in progress, and its timer is reset by **any** runner event, not only tokens;
-whether a paused peer leaves it un-reset is a prediction the pause trials test.
+generation in progress, and its timer is reset by **any** runner event, not only tokens.
+Measured 2026-10-22, 10 worker pauses: the master's 15 s silence clock ended the stream
+every time (14.5–15.9 s after the SIGSTOP, via `InstanceDeleted` and the error chunk),
+so the stall detector was never reached; it matters only for a hang the master cannot
+see, i.e. a runner that stops while its node keeps reporting.
 
 The third is a deadlock in placement, hit twice in the 26 placements of 2026-10-21's 13
 kill trials (once placing fresh on 3 nodes, once re-placing on the 2 survivors), and each
