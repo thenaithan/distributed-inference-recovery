@@ -8,6 +8,11 @@ is manylinux_2_39) and the two environment variables a one-socket desktop needs:
     V=0.32.0
     pip install "https://github.com/vllm-project/vllm/releases/download/v$V/vllm-$V+cpu-cp38-abi3-manylinux_2_39_x86_64.whl" \
         --extra-index-url https://download.pytorch.org/whl/cpu
+    # the wheel's metadata says `triton==3.8.0`, which pip resolves to the NVIDIA triton; torch
+    # inductor then asks the CUDA driver during the warm-up compile and the worker dies with
+    # "Torch not compiled with CUDA enabled". vLLM's own requirements/cpu.txt wants triton-cpu:
+    pip uninstall -y triton
+    pip install "triton @ https://github.com/triton-lang/triton-cpu/releases/download/v3.8.0/triton-3.8.0+cpu-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
     export LD_PRELOAD="$(find "$VIRTUAL_ENV" -name libiomp5.so | head -1):$LD_PRELOAD"
     export VLLM_CPU_OMP_THREADS_BIND="0-9|10-19"   # 'auto' wants one NUMA node per rank and aborts with one
     python3 trial.py --serve    # launches `vllm serve MODEL -pp 2 --port 8000`, waits for /health
