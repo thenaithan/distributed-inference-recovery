@@ -13,6 +13,10 @@ is manylinux_2_39) and the two environment variables a one-socket desktop needs:
     # "Torch not compiled with CUDA enabled". vLLM's own requirements/cpu.txt wants triton-cpu:
     pip uninstall -y triton
     pip install "triton @ https://github.com/triton-lang/triton-cpu/releases/download/v3.8.0/triton-3.8.0+cpu-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+    # triton-cpu still ships the NVIDIA backend and prefers it whenever libcuda.so.1 loads and
+    # cuInit succeeds (triton/runtime/driver.py), i.e. on any host with an NVIDIA driver, and
+    # then dies the same way because torch is the CPU build. trial.py exports this itself:
+    export TRITON_DEFAULT_BACKEND=cpu
     export LD_PRELOAD="$(find "$VIRTUAL_ENV" -name libiomp5.so | head -1):$LD_PRELOAD"
     export VLLM_CPU_OMP_THREADS_BIND="0-9|10-19"   # 'auto' wants one NUMA node per rank and aborts with one
     python3 trial.py --serve    # launches `vllm serve MODEL -pp 2 --port 8000`, waits for /health
@@ -80,7 +84,9 @@ def healthy(timeout=2.0) -> bool:
 def launch_server() -> tuple[subprocess.Popen, float, float]:
     t0 = now()
     env = dict(os.environ, VLLM_LOGGING_LEVEL=os.environ.get("VLLM_LOGGING_LEVEL", "INFO"),
-               VLLM_CPU_OMP_THREADS_BIND=CPU_BIND)
+               VLLM_CPU_OMP_THREADS_BIND=CPU_BIND,
+               # triton-cpu picks the NVIDIA backend on a host with an NVIDIA driver (see docstring)
+               TRITON_DEFAULT_BACKEND=os.environ.get("TRITON_DEFAULT_BACKEND", "cpu"))
     proc = subprocess.Popen(SERVE_CMD, env=env, stdout=open("vllm-serve.log", "ab"), stderr=subprocess.STDOUT)
     while not healthy():
         if proc.poll() is not None:
