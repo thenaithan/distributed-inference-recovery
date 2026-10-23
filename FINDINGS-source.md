@@ -60,13 +60,26 @@ nothing reads it: a placement whose ranks never connect has no timeout (see belo
 (`engines/mlx/cache.py:244-256`) and dies with it.
 
 **Master loss:** zenoh `Expired` or 30 s heartbeat silence → 3 s election → the new
-master drops all generation tasks (`master/main.py:173-187`). Which of the two fires is
-not deterministic: exo's own comment says the liveliness token of a crashed node "can
-be seen indefinitely" by the others in a cluster of three or more (`election.py:24-27`),
-so the 30 s timeout is the backstop; a `Connection` message (`election.py:300-318`) starts
-the election 0.2 s after the expiry when it does fire. Measured 2026-10-22: 3 of 9 master
-kills detected in 3.3 s, 6 in 30–33 s, and in the slow ones no expiry was logged within
-400 s; the API ends every
+master drops all generation tasks (`master/main.py:173-187`). Measured over 20 master
+losses (10 kills, 5 pauses, 5 partitions, 2026-10-22/23), detection takes one of three
+paths, and which one is not deterministic:
+
+- 3.3 s: the dying container closes its TCP links, a survivor logs `expired: <id>` within
+  0.1 s (`swarm.rs:89`, liveliness token deleted), a `Connection` message starts the
+  election 0.2 s later (`election.py:300-318`). Kill only: 3 of 10.
+- 13.2 s: no close reaches the peers (frozen process or removed interface), so zenoh's
+  link lease runs out at its default 10 s (`transport/link/tx/lease`, exo leaves it at the
+  default, `rust/networking/src/lib.rs`), the token is deleted, and the election follows.
+  All 5 partitions and 3 of 5 pauses; in each case exactly one survivor logged the expiry.
+- 30–36 s: no survivor ever logs an expiry (checked to 400 s). The follower's 30 s
+  MASTER_SILENCE_TIMEOUT fires, then the election. 7 of 10 kills, 2 of 5 pauses. exo's own
+  comment predicts this: in a cluster of three or more a crashed node's token "can be
+  seen indefinitely" (`election.py:24-27`), so the 30 s timeout is the backstop.
+
+`gone` is then the new master's 15 s NODE_SILENCE clock on the dead node (18.3, 28.4 or
+45–51 s after the failure). Which path a loss takes correlated with which container was
+lost (node 1: slow in all 4; node 2: fast in 6 of 7) rather than with the mode, which
+points at the zenoh link topology formed at start-up; not pinned down. The API ends every
 in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 346-356`). Instances survive a master change; requests do not.
 
