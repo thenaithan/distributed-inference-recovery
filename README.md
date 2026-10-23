@@ -52,6 +52,7 @@ vLLM (a venv with `vllm` installed; CPU backend):
 python3 vllm/trial.py --mode none
 python3 vllm/trial.py --mode kill  --at-token 5 --out vllm/trials.jsonl
 python3 vllm/trial.py --mode pause --at-token 5 --out vllm/trials.jsonl
+for i in $(seq 10); do python3 vllm/trial.py --mode kill --at-token 5 --out vllm/trials.jsonl; done   # each trial launches and stops its own server
 python3 analyze.py vllm/trials.jsonl
 ```
 

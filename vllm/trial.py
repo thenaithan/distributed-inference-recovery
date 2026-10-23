@@ -82,6 +82,9 @@ def healthy(timeout=2.0) -> bool:
 
 
 def launch_server() -> tuple[subprocess.Popen, float, float]:
+    if healthy():
+        raise RuntimeError(f"something already answers {BASE}/health; stop it (pkill -f 'vllm serve') "
+                           "or pass --server-pid")
     t0 = now()
     env = dict(os.environ, VLLM_LOGGING_LEVEL=os.environ.get("VLLM_LOGGING_LEVEL", "INFO"),
                VLLM_CPU_OMP_THREADS_BIND=CPU_BIND,
@@ -223,6 +226,9 @@ def main() -> None:
             proc2.terminate()
         except Exception as e:
             rec["recover_error"] = f"{type(e).__name__}: {e}"
+
+    if proc is not None and args.mode == "none":
+        proc.terminate()  # the server we launched; failure modes end with their own relaunch
 
     with open(args.out, "a") as f:
         f.write(json.dumps(rec) + "\n")
