@@ -109,6 +109,8 @@ signature: the stuck node logs `runner connecting` and `Starting initialization 
 N` but never `initialization complete`; the last rank's node logs `runner created` and
 nothing more. The harness fails such a placement after 90 s (`CONNECT_TIMEOUT`). The GIL
 explanation fits every observation; a thread dump of a stuck runner would make it certain.
+Reported upstream as exo-explore/exo#2464 (2026-10-23); the mlx-cpu pairing bug the image
+works around was already exo-explore/exo#2359, where we added the cause and the fix.
 
 **Measurement hooks:** events `NodeTimedOut`, `InstanceDeleted`, `RunnerStatusUpdated`,
 `TaskFailed`, `ChunkGenerated`/`ErrorChunk` (`shared/types/events.py:36-109`), stamped by

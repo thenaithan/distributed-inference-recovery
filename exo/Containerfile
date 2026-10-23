@@ -18,7 +18,8 @@ WORKDIR /opt/exo
 RUN cd dashboard && npm install && npm run build && cd ..
 RUN uv sync --extra mlx-cpu
 
-# exo's mlx-cpu extra is broken at this commit (still so on main as of 2026-10-21): it pairs
+# exo's mlx-cpu extra is broken at this commit (still so on main as of 2026-10-23, see
+# https://github.com/exo-explore/exo/issues/2359): it pairs
 # the mlx binding from a JACCL-fix fork (a CUDA build, no CPU lib in that release) with
 # mlx-cpu 0.31.2 from PyPI, and the runner dies on import with an undefined
 # mlx::core::linalg::det symbol. No PyPI mlx-cpu matches the fork's binding; the official
