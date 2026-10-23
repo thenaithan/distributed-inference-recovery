@@ -82,7 +82,10 @@ generation in progress, and its timer is reset by **any** runner event, not only
 Measured 2026-10-22, 10 worker pauses: the master's 15 s silence clock ended the stream
 every time (14.5–15.9 s after the SIGSTOP, via `InstanceDeleted` and the error chunk),
 so the stall detector was never reached; it matters only for a hang the master cannot
-see, i.e. a runner that stops while its node keeps reporting.
+see, i.e. a runner that stops while its node keeps reporting. Ten worker partitions on
+2026-10-23 (`podman network disconnect`, sockets left open) went the same way: detect
+14.4–16.0 s, C 273.0–281.2 s. For a lost worker, exo's kill, pause and cut are one case:
+the master's silence clock decides, not the shape of the failure.
 
 The third is a deadlock in placement, hit twice in the 26 placements of 2026-10-21's 13
 kill trials (once placing fresh on 3 nodes, once re-placing on the 2 survivors), and each
