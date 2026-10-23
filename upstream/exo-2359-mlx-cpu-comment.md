@@ -1,6 +1,6 @@
 # Draft comment for exo-explore/exo issue #2359
 
-Status: not yet posted. #2359 ("[BUG] [Linux] mlx-cpu extra: ImportError undefined
+Status: posted by the user on 2026-10-23. #2359 ("[BUG] [Linux] mlx-cpu extra: ImportError undefined
 symbol (ThreadLocalStream) on import mlx.core", open since 2026-09-30, no comments)
 already reports this bug, so we add our evidence and fix there instead of opening a
 duplicate. Post at https://github.com/exo-explore/exo/issues/2359 or with

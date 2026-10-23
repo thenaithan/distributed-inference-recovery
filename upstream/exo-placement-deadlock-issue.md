@@ -1,60 +1,41 @@
 # Draft GitHub issue for exo-explore/exo
 
-Status: not yet filed. File at https://github.com/exo-explore/exo/issues/new (bug
-template) or with `gh issue create --repo exo-explore/exo --title "<title>" --body-file
+Status: not yet filed. Paste at https://github.com/exo-explore/exo/issues/new (bug
+template) or `gh issue create --repo exo-explore/exo --title "<title>" --body-file
 upstream/exo-placement-deadlock-issue.md` after deleting this header block. Record the
 issue number here once filed.
 
 ---
 
-**Title:** [BUG] Placement can deadlock: runner's `RunnerConnecting` status never leaves the process, last rank is never told to connect, node stays wedged until its exo process is restarted
+**Title:** [BUG] Placement deadlocks ~1 in 15 times: runner stuck in `mx.distributed.init`, status never reaches the master, node wedged until restart
 
 ## Summary
 
-About one placement in fifteen on our Linux cluster never becomes ready. The runners of
-the new instance stay `RunnerIdle` in the cluster state forever: nothing times out, the
-instance cannot be deleted cleanly, and every later placement that includes the affected
-node wedges the same way. Only restarting that node's exo process clears it.
+About one placement in fifteen never becomes ready. The runners stay `RunnerIdle` in the
+cluster state forever, nothing times out, and afterwards every placement that includes
+the affected node hangs the same way. Only restarting that node's exo process clears it.
 
-From the logs and the source the cause looks like an ordering race between the runner's
-status/acknowledgement messages and `mx.distributed.init`, with no timeout anywhere on
-the path. Details below. We are happy to supply full node logs or a thread dump of a
-stuck runner.
+Seen 5 times in ~70 placements over three days, on fresh 3-node placements and on 2-node
+re-placements after a node left.
 
 ## Environment
 
-- exo `bc412e2` (2026-10-13), source install, `uv sync --extra mlx-cpu`; the code paths
-  cited below are unchanged on `main` as of 2026-10-23
-- Linux x86_64 host, Python 3.13, three exo nodes in rootless Podman containers on one
-  host (one podman network, zenoh discovery), MLX backend on CPU
-- mlx 0.32.0 and mlx-cpu 0.32.0 from PyPI (the fork wheel the `mlx-cpu` extra selects
-  does not import, see #2359)
-- instance: `MlxRing`, `Pipeline` sharding, `mlx-community/Qwen3-0.6B-8bit`, 2 or 3 nodes
+- exo `bc412e2` (2026-10-13), `uv sync --extra mlx-cpu`; the code paths below are
+  unchanged on `main` as of 2026-10-23
+- Linux x86_64, Python 3.13, 3 nodes in rootless Podman containers on one host, MLX CPU
+  backend (PyPI mlx + mlx-cpu 0.32.0, see #2359)
+- `MlxRing`, `Pipeline`, `mlx-community/Qwen3-0.6B-8bit`
 
-## Steps to reproduce
+## Reproduce
 
-1. Start 3 nodes; wait until all see each other.
-2. `POST /place_instance` with `{"model_id": "mlx-community/Qwen3-0.6B-8bit",
-   "sharding": "Pipeline", "instance_meta": "MlxRing", "min_nodes": 3}`.
-3. Poll `GET /state` for the instance's runner statuses.
+`POST /place_instance` with `{"model_id": "mlx-community/Qwen3-0.6B-8bit", "sharding":
+"Pipeline", "instance_meta": "MlxRing", "min_nodes": 3}`, poll `GET /state`. It is a
+race; repeating the placement on a small model hits it within a few dozen attempts.
 
-Usually all runners reach `RunnerReady` in a few seconds. We hit the hang 5 times in
-roughly 70 placements over three days (2026-10-21 to 2026-10-23), both on fresh 3-node
-placements and on 2-node placements after a node was removed. It is a race, so there is
-no deterministic repro; placing repeatedly on a small CPU model gets it within a few
-dozen attempts.
+## Symptom
 
-## What happens
-
-Cluster state: the stuck runner(s) show `RunnerIdle` indefinitely (we waited 90 s to
-400 s; one stayed for over an hour). Example, 2 nodes, 90 s after placement:
-
-```
-{'12508cea-…': 'RunnerIdle', 'd29d916e-…': 'RunnerIdle'}
-```
-
-Node logs. The stuck node logs the runner connecting and starting init but never
-completing it:
+Runner statuses stay `RunnerIdle` indefinitely (we waited up to an hour). The stuck
+node's log ends with:
 
 ```
 [ 01:37:25.6523AM | INFO ] runner created
@@ -62,77 +43,40 @@ completing it:
 [ 01:37:25.6835AM | INFO ] Starting initialization for rank 1
 ```
 
-(normal runs continue with `initialization complete` and `runner connected` within a
-second.) The node that holds the last rank logs `runner created` and nothing more: it is
-never sent `ConnectToGroup`.
+with no `initialization complete`. The node holding the last rank logs only `runner
+created`: it is never sent `ConnectToGroup`. After `DELETE /instance/<id>` the stuck
+node does not act on the `Shutdown` either, and later instances that include it never
+form.
 
-Afterwards:
+## Cause, as far as the source shows
 
-- `DELETE /instance/<id>` removes the instance from the state, but the stuck node does not
-  act on the resulting `Shutdown` (it logs nothing while the other nodes tear their
-  runners down).
-- Every later `place_instance` that includes the stuck node hangs the same way. Nodes
-  not involved keep working.
-- Restarting the stuck node's exo process clears it. Nothing short of that did.
+The last rank is told to connect only when the state shows every other runner as
+`RunnerConnecting` (`worker/plan.py:199-211`). A runner sets `RunnerConnecting`,
+acknowledges the task, then blocks in `mx.distributed.init` (`runner/runner.py:237-242`,
+`engines/mlx/utils_mlx.py:121`). Both messages go through a `multiprocessing.Queue`
+(`utils/channels.py:231`), which hands them to a feeder thread that needs the GIL, and
+MLX's `init` binding holds the GIL for its whole duration (mlx `python/src/
+distributed.cpp`, no `gil_scoped_release`, on v0.32.0 and main). If `init` gets the GIL
+before the feeder thread has written the two messages, they never leave the process:
+the master never sees `RunnerConnecting`, the last rank never connects, `init` never
+returns.
 
-## Why, as far as we can tell from the source
+Nothing bounds this: `initialize_timeout` (400 s) is stored but never read
+(`runner/supervisor.py:193,216,244`), and the stall detector needs a generation in
+progress. It is sticky because the worker awaits the acknowledgement in `start_task`
+(`supervisor.py:315`), so the node's planning loop stops for good.
 
-Ranks connect in order. Every rank but the last is told to `ConnectToGroup` as soon as
-the runners exist; the last rank is told to connect only once the state shows every
-other runner as `RunnerConnecting` (`src/exo/worker/plan.py:199-211`).
+This fits the code and all five occurrences; we have not yet confirmed it with a thread
+dump and will attach one at the next occurrence.
 
-On `ConnectToGroup` a runner sets its status to `RunnerConnecting`, acknowledges the
-task, and then calls `generator.connect`, which blocks in `mx.distributed.init(backend=
-"ring", strict=True)` until all peers are in (`src/exo/worker/runner/runner.py:237-242`,
-`src/exo/worker/engines/mlx/utils_mlx.py:121`).
+## Suggested fix
 
-Both the status update and the acknowledgement leave the runner process through a
-`multiprocessing.Queue` (`src/exo/utils/channels.py:231`). `Queue.put` only appends to an
-in-process buffer; a feeder thread pickles and writes it to the pipe, and that thread
-needs the GIL. MLX's `init` binding is a plain nanobind `m.def` with no
-`gil_scoped_release` (mlx v0.32.0 `python/src/distributed.cpp:76-81`; still a GIL-holding
-lambda on mlx main), so once the main thread enters `init` the feeder thread cannot run
-until `init` returns.
-
-If the feeder thread gets to write both messages before the main thread enters `init`,
-all is well. If `init` gets the GIL first, nothing leaves the process: the state keeps
-the runner at `RunnerIdle`, the last rank is never told to connect, `init` waits for a
-peer that will never come, and the feeder thread waits for a GIL that will never be
-released. The log signature above (`Starting initialization` logged, status never seen
-by the master) is exactly this.
-
-Nothing times out:
-
-- `RunnerSupervisor.initialize_timeout` (default 400 s) is stored but never read
-  (`src/exo/worker/runner/supervisor.py:193,216,244`).
-- The 90 s stall detector only runs for rank 0 with a generation in progress.
-
-And it is sticky because the worker awaits the task acknowledgement in `start_task`
-(`src/exo/worker/runner/supervisor.py:315`, `event.wait()` for every non-generation
-task). That wait never ends, so the worker's planning loop for that node stops: it
-ignores the later `Shutdown` and any new instance that includes the node can never form.
-
-The GIL explanation fits every observation and the code, but we have not yet confirmed
-it with a thread dump of a stuck runner. We will attach one at the next occurrence.
-
-## Possible fixes
-
-Any one of these would break the deadlock; the first two also cover other startup
-hangs:
-
-1. Bound the wait in `start_task` (or run a watchdog on `RunnerConnecting`) and turn a
-   runner that does not acknowledge or connect in time into `RunnerFailed`, so the
-   instance is torn down and the node keeps planning. `initialize_timeout` already exists
-   for this and is unused.
-2. Do not block the node's planning loop on a single runner's acknowledgement.
-3. Make the status/acknowledgement sends synchronous (write to the pipe in the calling
-   thread instead of via the `multiprocessing.Queue` feeder thread), or otherwise ensure
-   they are flushed before `connect` is called.
-4. Upstream in MLX: release the GIL around `distributed::init`
-   (`nb::call_guard<nb::gil_scoped_release>()`), which would also let the feeder thread
-   run. We can open an issue there if you agree with the diagnosis.
+Turn a runner that does not acknowledge or connect within a bound into `RunnerFailed`
+(the unused `initialize_timeout` fits), and do not block the node's planning loop on one
+runner's acknowledgement. Flushing the status/ack sends synchronously before `connect`,
+or releasing the GIL around `distributed::init` in MLX, would remove the race itself.
 
 ## Workaround
 
-Restart the exo process on the node whose log shows `Starting initialization for rank N`
-with no `initialization complete`, then delete and re-place the instance.
+Restart exo on the node whose log has `Starting initialization` without `initialization
+complete`, then re-place.
