@@ -42,6 +42,7 @@ python3 exo/trial.py --nodes 3 --fail-worker --mode kill  --out exo/trials.jsonl
 exo/cluster.sh down && exo/cluster.sh up 3                      # fresh cluster between trials (restores the failed node)
 python3 exo/trial.py --nodes 3 --fail-worker --mode pause --out exo/trials.jsonl
 python3 exo/trial.py --nodes 3 --fail-master --mode kill --out exo/trials.jsonl       # master loss: kills whichever node is master, streams via a survivor
+nohup exo/run_trials.sh cut worker 10 > exo/logs/run_trials.out 2>&1 &            # unattended: recreate cluster + trial until 10 complete cut-worker results
 python3 analyze.py exo/trials.jsonl --regime tvbox-26b
 ```
 
