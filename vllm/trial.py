@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """One failure trial against vLLM with pipeline parallelism on CPU: measure C and its parts.
 
-Setup (once, in a venv on the host; no GPU needed, PP works on the CPU backend):
+Setup (once, in a venv on the host; no GPU needed, PP works on the CPU backend). The
+release CPU wheel (checked with v0.32.0; the docs' URL says manylinux_2_34 but the asset
+is manylinux_2_39) and the two environment variables a one-socket desktop needs:
 
-    pip install vllm            # or follow docs/getting_started/installation/cpu.md
+    V=0.32.0
+    pip install "https://github.com/vllm-project/vllm/releases/download/v$V/vllm-$V+cpu-cp38-abi3-manylinux_2_39_x86_64.whl" \
+        --extra-index-url https://download.pytorch.org/whl/cpu
+    export LD_PRELOAD="$(find "$VIRTUAL_ENV" -name libiomp5.so | head -1):$LD_PRELOAD"
+    export VLLM_CPU_OMP_THREADS_BIND="0-9|10-19"   # 'auto' wants one NUMA node per rank and aborts with one
     python3 trial.py --serve    # launches `vllm serve MODEL -pp 2 --port 8000`, waits for /health
+
+On the CPU backend `--gpu-memory-utilization` is the fraction of *RAM* that must be free at
+start (default 0.92, so a busy host fails with "Available memory on node 0 ... is less
+than desired"); VLLM_MEM_UTIL (default 0.3) sets it. KV cache per rank is vLLM's CPU
+default (4 GiB) unless VLLM_CPU_KVCACHE_SPACE is set.
 
 Trial:
 
@@ -44,8 +55,9 @@ PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rive
 # pinned (exo/cluster.sh EXO_CPUSETS), set the same sets here, e.g. "0-3|4-7", so both
 # systems get equal cores. A server passed with --server-pid must be launched with it too.
 CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND", "auto")
+MEM_UTIL = os.environ.get("VLLM_MEM_UTIL", "0.3")  # fraction of RAM that must be free at start (CPU backend)
 SERVE_CMD = ["vllm", "serve", MODEL, "--pipeline-parallel-size", "2", "--port", str(PORT),
-             "--max-model-len", "2048"]
+             "--max-model-len", "2048", "--gpu-memory-utilization", MEM_UTIL]
 
 
 def now() -> float:
@@ -137,7 +149,8 @@ def main() -> None:
     args = ap.parse_args()
 
     rec: dict = dict(label=args.label, model=MODEL, mode=args.mode, at_token=args.at_token,
-                     fail_rank=args.fail_rank, host_time=now(), pp=2, omp_threads_bind=CPU_BIND)
+                     fail_rank=args.fail_rank, host_time=now(), pp=2, omp_threads_bind=CPU_BIND,
+                     mem_util=MEM_UTIL)
 
     if args.server_pid:
         proc, spid = None, args.server_pid
