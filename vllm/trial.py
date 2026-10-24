@@ -17,9 +17,12 @@ is manylinux_2_39) and the two environment variables a one-socket desktop needs:
     # cuInit succeeds (triton/runtime/driver.py), i.e. on any host with an NVIDIA driver, and
     # then dies the same way because torch is the CPU build. trial.py exports this itself:
     export TRITON_DEFAULT_BACKEND=cpu
-    export LD_PRELOAD="$(find "$VIRTUAL_ENV" -name libiomp5.so | head -1):$LD_PRELOAD"
-    export VLLM_CPU_OMP_THREADS_BIND="0-9|10-19"   # 'auto' wants one NUMA node per rank and aborts with one
     python3 trial.py --serve    # launches `vllm serve MODEL -pp 2 --port 8000`, waits for /health
+
+trial.py also sets, unless the caller did: VLLM_CPU_OMP_THREADS_BIND to an even split of this
+process's CPUs over the two ranks (vLLM's 'auto' wants one NUMA node per rank and aborts on a
+one-socket host), and LD_PRELOAD to the venv's libiomp5.so (vLLM's recommended OpenMP runtime).
+Both are recorded per trial.
 
 On the CPU backend `--gpu-memory-utilization` is the fraction of *RAM* that must be free at
 start (default 0.92, so a busy host fails with "Available memory on node 0 ... is less
@@ -63,9 +66,42 @@ PROMPT = "Write a long, detailed, numbered list of 60 unrelated facts about rive
 # OpenMP thread binding per PP rank. Default "auto" is vLLM's own. When exo's nodes are
 # pinned (exo/cluster.sh EXO_CPUSETS), set the same sets here, e.g. "0-3|4-7", so both
 # systems get equal cores. A server passed with --server-pid must be launched with it too.
-CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND", "auto")
+PP = 2
+
+
+def _ranges(cpus: list[int]) -> str:
+    out, i = [], 0
+    while i < len(cpus):
+        j = i
+        while j + 1 < len(cpus) and cpus[j + 1] == cpus[j] + 1:
+            j += 1
+        out.append(f"{cpus[i]}-{cpus[j]}" if j > i else str(cpus[i]))
+        i = j + 1
+    return ",".join(out)
+
+
+def default_bind(pp: int = PP) -> str:
+    """Even contiguous split of this process's CPUs, one group per PP rank: "0-9|10-19"."""
+    cpus = sorted(os.sched_getaffinity(0))
+    per = len(cpus) // pp
+    return "|".join(_ranges(cpus[r * per:(r + 1) * per]) for r in range(pp))
+
+
+def default_preload() -> str:
+    """vLLM's CPU docs preload Intel OpenMP; the wheel's torch brings it into the venv."""
+    cur = os.environ.get("LD_PRELOAD", "")
+    if "libiomp5" in cur:
+        return cur
+    for root, _, files in os.walk(os.path.join(sys.prefix, "lib")):
+        if "libiomp5.so" in files:
+            return ":".join(x for x in (os.path.join(root, "libiomp5.so"), cur) if x)
+    return cur
+
+
+CPU_BIND = os.environ.get("VLLM_CPU_OMP_THREADS_BIND") or default_bind()
+LD_PRELOAD = default_preload()
 MEM_UTIL = os.environ.get("VLLM_MEM_UTIL", "0.3")  # fraction of RAM that must be free at start (CPU backend)
-SERVE_CMD = ["vllm", "serve", MODEL, "--pipeline-parallel-size", "2", "--port", str(PORT),
+SERVE_CMD = ["vllm", "serve", MODEL, "--pipeline-parallel-size", str(PP), "--port", str(PORT),
              "--max-model-len", "2048", "--gpu-memory-utilization", MEM_UTIL]
 
 
@@ -87,10 +123,13 @@ def launch_server() -> tuple[subprocess.Popen, float, float]:
                            "or pass --server-pid")
     t0 = now()
     env = dict(os.environ, VLLM_LOGGING_LEVEL=os.environ.get("VLLM_LOGGING_LEVEL", "INFO"),
-               VLLM_CPU_OMP_THREADS_BIND=CPU_BIND,
+               VLLM_CPU_OMP_THREADS_BIND=CPU_BIND, LD_PRELOAD=LD_PRELOAD,
                # triton-cpu picks the NVIDIA backend on a host with an NVIDIA driver (see docstring)
                TRITON_DEFAULT_BACKEND=os.environ.get("TRITON_DEFAULT_BACKEND", "cpu"))
-    proc = subprocess.Popen(SERVE_CMD, env=env, stdout=open("vllm-serve.log", "ab"), stderr=subprocess.STDOUT)
+    try:
+        proc = subprocess.Popen(SERVE_CMD, env=env, stdout=open("vllm-serve.log", "ab"), stderr=subprocess.STDOUT)
+    except FileNotFoundError:
+        raise SystemExit("`vllm` not on PATH: activate the venv (source .venv/bin/activate)") from None
     while not healthy():
         if proc.poll() is not None:
             raise RuntimeError("vllm serve exited during startup; see vllm-serve.log")
@@ -163,8 +202,8 @@ def main() -> None:
     args = ap.parse_args()
 
     rec: dict = dict(label=args.label, model=MODEL, mode=args.mode, at_token=args.at_token,
-                     fail_rank=args.fail_rank, host_time=now(), pp=2, omp_threads_bind=CPU_BIND,
-                     mem_util=MEM_UTIL)
+                     fail_rank=args.fail_rank, host_time=now(), pp=PP, omp_threads_bind=CPU_BIND,
+                     mem_util=MEM_UTIL, ld_preload=LD_PRELOAD)
 
     if args.server_pid:
         proc, spid = None, args.server_pid

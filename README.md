@@ -46,9 +46,11 @@ nohup exo/run_trials.sh cut worker 10 > exo/logs/run_trials.out 2>&1 &          
 python3 analyze.py exo/trials.jsonl --regime tvbox-26b
 ```
 
-vLLM (a venv with `vllm` installed; CPU backend):
+vLLM (CPU backend; install steps in the `vllm/trial.py` docstring; the harness sets the
+OpenMP binding, preload and triton backend itself):
 
 ```
+source .venv/bin/activate
 python3 vllm/trial.py --mode none
 python3 vllm/trial.py --mode kill  --at-token 5 --out vllm/trials.jsonl
 python3 vllm/trial.py --mode pause --at-token 5 --out vllm/trials.jsonl
