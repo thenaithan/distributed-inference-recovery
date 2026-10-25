@@ -7,17 +7,19 @@ ARG LLAMA_COMMIT=74bca39
 FROM docker.io/library/debian:bookworm-slim AS build
 ARG LLAMA_COMMIT
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git build-essential cmake libcurl4-openssl-dev ca-certificates \
+        git build-essential cmake libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt
 RUN git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp && git checkout ${LLAMA_COMMIT}
 WORKDIR /opt/llama.cpp
 # CPU backend + RPC. No GPU. Native CPU flags off so the image runs on any x86-64.
-RUN cmake -B build -DGGML_RPC=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release \
+# LLAMA_OPENSSL (default ON) gives -hf its HTTPS; without libssl-dev it silently builds
+# without HTTPS and the server exits with "HTTPS is not supported" at the first download.
+RUN cmake -B build -DGGML_RPC=ON -DGGML_NATIVE=OFF -DLLAMA_OPENSSL=ON -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --config Release -j --target ggml-rpc-server llama-server llama-cli
 
 FROM docker.io/library/debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libcurl4 libgomp1 ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libgomp1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # build/bin holds the binaries and the shared libraries they link (libllama, libggml*,
 # libllama-cli-impl); outside the build tree the loader needs to be told where they are
