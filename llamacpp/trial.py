@@ -77,7 +77,9 @@ def wait_ready(timeout: float = 900.0) -> float:
         if healthy():
             return now()
         if not main_running():
-            raise RuntimeError("main host exited during startup: ./cluster.sh logs main")
+            tail = subprocess.run(["podman", "logs", "--tail", "25", "main"], capture_output=True, text=True)
+            raise RuntimeError("main host exited during startup; its last log lines:\n"
+                               + (tail.stdout + tail.stderr).rstrip())
         time.sleep(0.5)
     raise RuntimeError("main host not healthy within timeout")
 
