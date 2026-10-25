@@ -73,7 +73,7 @@ python3 llamacpp/trial.py --mode none --out llamacpp/smoke.jsonl                
 python3 llamacpp/trial.py --mode killproc --out llamacpp/trials.jsonl                 # reset: expect sub-second detect, then relaunch
 python3 llamacpp/trial.py --mode kill     --out llamacpp/trials.jsonl                 # vanished namespace: expect no detection (harness stall timeout 600 s)
 python3 llamacpp/trial.py --mode pause    --out llamacpp/trials.jsonl
-for n in 33 512 2048 8192; do python3 llamacpp/trial.py --mode killproc --prompt-tokens $n --out llamacpp/trials.jsonl; done   # prefill vs length
+nohup llamacpp/run_trials.sh all > llamacpp/logs/run_trials.out 2>&1 &              # unattended: 10 × killproc, 5 × kill/pause/cut, killproc at 512/2048/6144 prompt tokens ×2 (~4 h)
 python3 analyze.py llamacpp/trials.jsonl
 ```
 

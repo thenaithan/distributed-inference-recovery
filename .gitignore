@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 vllm-serve.log
 exo/logs/
+llamacpp/logs/
