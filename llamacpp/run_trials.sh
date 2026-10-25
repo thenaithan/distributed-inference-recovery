@@ -90,6 +90,8 @@ trap 'log "interrupted"; exit 130' INT TERM
 case "${1:-}" in
   all)
     healthy || recreate || exit 1
+    log "plumbing check (--mode none)"
+    python3 "$HERE/trial.py" --mode none --out "$HERE/smoke.jsonl" || { log "plumbing check failed; not starting the plan"; exit 1; }
     run_group killproc "$KILLPROC_N" 33 || exit 1
     for m in kill pause cut; do run_group "$m" "$OTHER_N" 33 || exit 1; done
     for p in $SWEEP; do run_group killproc "$SWEEP_N" "$p" || exit 1; done

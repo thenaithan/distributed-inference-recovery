@@ -91,12 +91,16 @@ def build_prompt(n_tokens: int) -> str:
 
 
 def stream(prompt: str, on_token, max_tokens: int, stall_timeout: float):
+    # thinking off, as in exo/trial.py and vllm/trial.py: Qwen3 otherwise spends its first tokens
+    # in reasoning_content and token --at-token is never reached
     body = {"model": "default", "stream": True, "max_tokens": max_tokens, "temperature": 0,
             "stream_options": {"include_usage": True}, "timings_per_token": True,
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "user", "content": prompt}]}
     req = urllib.request.Request(f"{BASE}/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     n, last, usage, timings = 0, None, {}, {}
+    fin = None  # (kind, t) once a finish_reason arrives; the usage chunk follows it, then [DONE]
     t_progress = now()
     try:
         with urllib.request.urlopen(req, timeout=stall_timeout) as r:
@@ -107,7 +111,7 @@ def stream(prompt: str, on_token, max_tokens: int, stall_timeout: float):
                     continue
                 payload = raw[5:].strip()
                 if payload == b"[DONE]":
-                    return n, now(), "done", last, usage, timings
+                    return (n, fin[1], fin[0], last, usage, timings) if fin else (n, now(), "done", last, usage, timings)
                 try:
                     obj = json.loads(payload)
                 except json.JSONDecodeError:
@@ -120,12 +124,13 @@ def stream(prompt: str, on_token, max_tokens: int, stall_timeout: float):
                 if "error" in obj:
                     return n, now(), "error_chunk", obj, usage, timings
                 ch = obj.get("choices") or []
-                if ch and ch[0].get("delta", {}).get("content"):
+                delta = ch[0].get("delta", {}) if ch else {}
+                if delta.get("content") or delta.get("reasoning_content"):
                     n += 1
                     t_progress = now()
                     on_token(n, t_progress)
-                if ch and ch[0].get("finish_reason"):
-                    return n, now(), f"finish:{ch[0]['finish_reason']}", obj, usage, timings
+                if ch and ch[0].get("finish_reason") and fin is None:
+                    fin = (f"finish:{ch[0]['finish_reason']}", now())  # keep reading for usage
     except TimeoutError:
         return n, now(), "harness_timeout", last, usage, timings
     except Exception as e:  # connection reset when llama-server aborts
@@ -182,6 +187,11 @@ def main() -> None:
                t_fail=state["t_fail"], t_stream_end=t_end, end_kind=kind, usage=usage, timings=timings,
                inter_token_s=[round(b - a, 4) for a, b in zip(tokens, tokens[1:])], last_payload=last)
     log(f"stream ended: {kind} after {n} tokens")
+    if args.mode == "none" and (n == 0 or not (usage or {}).get("prompt_tokens") or not (timings or {}).get("prompt_ms")):
+        with open(args.out, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        raise SystemExit(f"plumbing check FAILED: {n} tokens, usage={usage}, timings={timings} "
+                         f"(record appended to {args.out})")
 
     if args.mode != "none":
         # the main host aborts on a transport error; a hang leaves it blocked. Either way,
