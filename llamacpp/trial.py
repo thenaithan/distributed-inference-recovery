@@ -66,6 +66,17 @@ def healthy() -> bool:
         return False
 
 
+def rpc_state(i: int) -> str:
+    out = subprocess.run(["podman", "inspect", "-f", "{{.State.Status}}", f"rpc-{i}"], capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else "absent"
+
+
+def injection_took(mode: str, i: int) -> bool:
+    """What the container must look like after the injection; 'cut' leaves no visible state."""
+    st = rpc_state(i)
+    return {"kill": st != "running", "killproc": st != "running", "pause": st == "paused"}.get(mode, True)
+
+
 def main_running() -> bool:
     out = subprocess.run(["podman", "inspect", "-f", "{{.State.Running}}", "main"], capture_output=True, text=True)
     return out.returncode == 0 and out.stdout.strip() == "true"
@@ -193,7 +204,13 @@ def main() -> None:
         raise SystemExit(f"plumbing check FAILED: {n} tokens, usage={usage}, timings={timings} "
                          f"(record appended to {args.out})")
 
-    if args.mode != "none":
+    if args.mode != "none" and state["t_fail"] is None:
+        rec["recover_error"] = f"never reached token {args.at_token}; nothing injected"
+    elif args.mode != "none" and not injection_took(args.mode, args.fail_rpc):
+        rec["recover_error"] = f"injection did not take: rpc-{args.fail_rpc} is {rpc_state(args.fail_rpc)} after {args.mode}"
+        log(rec["recover_error"])
+    elif args.mode != "none":
+        rec["rpc_state_after"] = rpc_state(args.fail_rpc)
         # the main host aborts on a transport error; a hang leaves it blocked. Either way,
         # recovery = restart the main host (the rpc host too, if it is gone) and resubmit.
         rec["t_main_exit"] = wait_main_exit(timeout=60.0)

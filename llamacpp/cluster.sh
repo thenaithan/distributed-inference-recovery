@@ -10,8 +10,8 @@
 #   ./cluster.sh resume <i>    SIGCONT rpc-i
 #   ./cluster.sh cut   <i>     disconnect rpc-i from the network (partition)
 #   ./cluster.sh heal  <i>     reconnect rpc-i
-#   ./cluster.sh killproc <i>  SIGKILL the rpc-server PROCESS inside its running container:
-#                              the kernel then resets the TCP connection (the crash case in
+#   ./cluster.sh killproc <i>  SIGKILL the rpc-server PROCESS (container PID 1, signalled from the
+#                              host): the kernel then resets the TCP connection (the crash case in
 #                              which the main host is told, as opposed to a vanished namespace)
 #
 # Layers are split evenly across the rpc hosts (-ts 1,1,... with the main host's own CPU
@@ -52,7 +52,8 @@ case "$cmd" in
   down)     for c in main $(podman ps -a --format '{{.Names}}' | grep '^rpc-' || true); do podman rm -f "$c" >/dev/null 2>&1 || true; done; echo removed ;;
   logs)     podman logs -f "$arg" ;;
   kill)     date +%s.%N; podman kill -s KILL "rpc-$arg" >/dev/null ;;
-  killproc) date +%s.%N; podman exec "rpc-$arg" sh -c 'kill -9 1' >/dev/null 2>&1 || true ;;
+  # from the host: the kernel ignores SIGKILL sent to a PID namespace's init from inside it
+  killproc) date +%s.%N; kill -9 "$(podman inspect -f '{{.State.Pid}}' "rpc-$arg")" ;;
   pause)    date +%s.%N; podman pause "rpc-$arg" >/dev/null ;;
   resume)   date +%s.%N; podman unpause "rpc-$arg" >/dev/null ;;
   cut)      date +%s.%N; podman network disconnect "$NET" "rpc-$arg" ;;
