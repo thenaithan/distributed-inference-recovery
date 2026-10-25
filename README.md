@@ -65,5 +65,5 @@ python3 analyze.py vllm/trials.jsonl
 - [x] exo plumbing check (2026-10-21); image fixes for exo's mlx-cpu pairing and MLX's JIT path
 - [x] reported upstream: exo placement deadlock [exo#2464](https://github.com/exo-explore/exo/issues/2464), mlx-cpu pairing in [exo#2359](https://github.com/exo-explore/exo/issues/2359) (2026-10-23)
 - [x] vLLM plumbing check (2026-10-23); CPU install needed four fixes, documented in `vllm/trial.py`
-- [ ] 10 trials per (system, mode)
+- [x] 10 trials per (system, mode) (exo 2026-10-21..23: kill/pause/cut worker, kill master ×10, pause/cut master ×5; vLLM 2026-10-24/25: kill, pause ×10)
 - [ ] measured $C$ into the resilience model; update its applicability section

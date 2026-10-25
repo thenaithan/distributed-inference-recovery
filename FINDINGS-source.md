@@ -160,6 +160,29 @@ The API server's watchdog then exits the whole process after
 `multiproc_executor.py:349, 362, 436-442`). There is no worker heartbeat; `/health` only
 reports whether the engine is already known dead (`async_llm.py:1129-1134`).
 
+**Measured (vLLM 0.32.0 CPU wheel, PP=2, Qwen3-0.6B, 2026-10-24/25; 10 kills, 10 pauses, the
+failed rank is PP1, injected at token 5).** Kill: the client sees the error after 1.5 s
+(0.0–3.7). The sentinel does fire at once ("Worker proc VllmWorker-1 died unexpectedly"
+is stamped in the same second as the kill), but the executor then waits for the surviving
+rank to come out of its blocked gloo send to the dead peer before it reports upward; that
+wait is 0 s when PP0 was between steps and up to 3.7 s when it was mid-send. The HTTP
+port closes 4.5 s after the kill (4.0–8.6; the 5 s watchdog, counted from the error), the
+relaunch takes 62 s (59–75; the warm-up compile runs on every start even with the
+torch-compile cache warm), and C is 66.6 s (64.1–84.6). Pause: the client sees the error
+after 300.0 s in all ten trials (300.0–300.1), exactly `VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS`,
+followed by "RPC call to sample_tokens timed out"; the port closes about 5 s later and the
+relaunch takes 68 s (63–96), so C is 373 s (369–403, n=6). In the other four pause trials
+the API server **process** outlived its closed port by more than 400 s (the harness then
+waited for it, so their recorded C of 775–785 s is a harness artefact, not a system
+number). The log differs in one place: on the six clean runs the shutdown logs "force
+killing sub process VLLM::Worker_PP0 / PP1"; on the four it does not. `kill_process_tree`
+(`vllm/utils/system_utils.py:208-233`) enumerates the engine core's children with psutil
+at the moment it force-kills it; if the core has already left on its SIGTERM, the workers,
+one of them still stopped, are orphaned rather than killed, and the server process does
+not exit. What it then blocks on is not yet confirmed (a py-spy dump of a lingering server
+would settle it). For an orchestrator probing the port the two cases are the same; for one
+that watches the process, the hang case can also hang the restart.
+
 **`--enable-fault-tolerance`** (new) is for data-parallel expert-parallel only: it aborts
 all requests, marks the engine unhealthy and waits up to
 `engine_recovery_timeout_sec = 120` for an orchestrator to POST a `retry`, which
