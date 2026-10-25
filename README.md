@@ -86,5 +86,5 @@ python3 analyze.py llamacpp/trials.jsonl
 - [x] vLLM plumbing check (2026-10-23); CPU install needed four fixes, documented in `vllm/trial.py`
 - [x] 10 trials per (system, mode) (exo 2026-10-21..23: kill/pause/cut worker, kill master ×10, pause/cut master ×5; vLLM 2026-10-24/25: kill, pause ×10)
 - [x] exo and vLLM analysed: `RESULTS.md`
-- [ ] llama.cpp: plumbing check, 10 × killproc, 5 × kill / pause / cut, prefill-length sweep
+- [x] llama.cpp (2026-10-25): plumbing check, killproc ×8 (two more owed: `llamacpp/run_trials.sh killproc 10`), kill / pause / cut ×5, prefill sweep at 571 / 2221 / 6601 prompt tokens ×2; `RESULTS.md` §5
 - [ ] measured $C$ into the resilience model; update its applicability section
