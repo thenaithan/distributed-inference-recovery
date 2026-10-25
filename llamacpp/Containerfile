@@ -19,8 +19,10 @@ RUN cmake -B build -DGGML_RPC=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DCMAKE_BUILD
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends libcurl4 libgomp1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# build/bin holds the binaries and the shared libraries they link (libllama, libggml*,
+# libllama-cli-impl); outside the build tree the loader needs to be told where they are
 COPY --from=build /opt/llama.cpp/build/bin/ /opt/llama.cpp/bin/
-ENV PATH=/opt/llama.cpp/bin:$PATH
+ENV PATH=/opt/llama.cpp/bin:$PATH LD_LIBRARY_PATH=/opt/llama.cpp/bin
 # model files live in a shared volume
 ENV LLAMA_CACHE=/models
 VOLUME /models
