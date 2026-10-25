@@ -92,7 +92,8 @@ def rpc_log_since(i: int, t: float) -> list[str]:
     the lines are stamped, which dates when it let go of the dead main host."""
     since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t - 1))
     out = subprocess.run(["podman", "logs", "-t", "--since", since, f"rpc-{i}"], capture_output=True, text=True)
-    return [l for l in (out.stdout + out.stderr).splitlines() if "connection" in l.lower()][-10:]
+    lines = [l for l in (out.stdout + out.stderr).splitlines() if "connection" in l.lower()]
+    return lines if len(lines) <= 10 else lines[:5] + ["..."] + lines[-5:]  # the first line dates the release
 
 
 def main_running() -> bool:
