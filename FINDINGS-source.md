@@ -245,3 +245,51 @@ distribution of:
 
 plus steady-state inter-token time. `measure/analyze.py` computes these from the trial
 logs and prints `detect_time` and `reconnect_time` for `churnsim`.
+
+## llama.cpp RPC backend (74bca39, 2026-10-25)
+
+`ggml-rpc-server` exposes a host's devices over TCP; the main host's `llama-server`
+is started with `--rpc host:port,...` and `-ngl` to place layers on them, split by
+`--tensor-split`. The layer slices form a pipeline across hosts, like the other two
+systems. The README (`tools/rpc/README.md`) calls the backend a proof of concept,
+"fragile and insecure", never to be run on an open network.
+
+**No discovery.** The peer list is a command-line argument (`common/arg.cpp:1178-1192`,
+`src/llama.cpp:191-276`). Nothing announces, nothing is looked up, nothing is
+re-resolved. The "discovery layer" of the model is the operator's configuration.
+
+**Failure handling: abort.** Every client-side RPC is wrapped in
+`RPC_STATUS_ASSERT`, defined as `GGML_ABORT("Remote RPC server crashed or returned
+malformed response")` (`ggml/src/ggml-rpc/ggml-rpc.cpp:31`); `send_msg`/`recv_msg`
+return false on any transport error (`:323-346`) and the caller aborts the whole
+`llama-server` process. Graph-compute failures are likewise asserted
+(`:2192, 2211, 2349`: "Unsuccessful graph computations are not supported with RPC").
+Connection setup aborts on failure (`:642-653`). The only retry in the file is a
+100 × 50 ms loop for the server-to-server peer connection at startup (`:2258-2263`).
+
+**No timeouts, no keepalive.** `transport.cpp` sets `TCP_NODELAY` (`:706`) and nothing
+else on the socket: no `SO_RCVTIMEO`, no `SO_SNDTIMEO`, no `SO_KEEPALIVE`,
+no `TCP_USER_TIMEOUT` (the one `timeout` in the file, `:391`, is an InfiniBand
+queue-pair attribute). A blocking `recv` from a peer that has stopped answering
+therefore never returns; a blocking `send` to one returns only when the kernel's
+retransmission limit is reached (minutes, kernel default). The server side
+(`tools/rpc/rpc-server.cpp`) has no timeouts either.
+
+**Predictions for the harness** (`llamacpp/`):
+
+| mode | what the main host sees | predicted detect | predicted recovery |
+|---|---|---|---|
+| `killproc` (SIGKILL the process; kernel sends RST) | `recv` fails → abort | one RPC, well under 1 s | relaunch `llama-server`: mmap load, seconds, plus prefill |
+| `kill` (container torn down; packets dropped) | `recv` blocks | never, until the kernel's TCP retransmit limit on a pending send (≈15 min) or forever on a pure recv | manual |
+| `pause` (SIGSTOP) | `recv` blocks | never | manual |
+| `cut` (network disconnect) | `recv` blocks | never | manual |
+
+So llama.cpp should show the sharpest version of the crash/hang asymmetry: sub-second
+on a reset, unbounded on anything that does not reset. It is also the system where
+prefill per token on CPU is a real number (batched, optimised), which the article-regime
+restatement needs; `--prompt-tokens` in the harness sweeps it, and `llama-server`
+reports `timings.prompt_ms` itself.
+
+**Strategy:** restart, with the operator as the only recovery mechanism; no state of
+the interrupted request survives (the KV cache for the remote layers lives in the
+rpc-server's memory and is addressed by the dead process's buffer ids).

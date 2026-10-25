@@ -6,9 +6,10 @@ back into the model in
 [distributed-inference-resilience](https://github.com/thenaithan/distributed-inference-resilience).
 
 That model fits a single constant $C$ (detect a failure, find a replacement, rebuild
-state) to the Petals paper. Here $C$ is measured on **exo** (consumer-device swarm) and
-**vLLM** (datacenter serving, pipeline-parallel on CPU), under three failure modes:
-a clean crash, a silent hang, and a network partition.
+state) to the Petals paper. Here $C$ is measured on **exo** (consumer-device swarm),
+**vLLM** (datacenter serving, pipeline-parallel on CPU) and **llama.cpp's RPC backend**
+(the CPU stack most likely to be found on real consumer devices), under three failure
+modes: a clean crash, a silent hang, and a network partition.
 
 ## Contents
 
@@ -21,6 +22,10 @@ a clean crash, a silent hang, and a network partition.
   `trial.py` (place, stream, inject failure, time recovery).
 - `vllm/` – `trial.py` (serve with `-pp 2` on CPU, stream, kill or pause a worker, time
   relaunch).
+- `llamacpp/` – `Containerfile`, `cluster.sh` (N `ggml-rpc-server` hosts + one
+  `llama-server` main host on a podman network), `trial.py` (kill / killproc / pause /
+  cut an rpc host; `--prompt-tokens` sweeps prefill length).
+- `RESULTS.md` – measured numbers for exo and vLLM.
 - `analyze.py` – trial logs → detect / gone / recover / C, and churnsim parameters.
 
 ## Quick start
@@ -58,6 +63,20 @@ for i in $(seq 10); do python3 vllm/trial.py --mode kill --at-token 5 --out vllm
 python3 analyze.py vllm/trials.jsonl
 ```
 
+llama.cpp (rootless Podman; first start downloads `ggml-org/Qwen3-0.6B-GGUF` into the
+`llama-models` volume):
+
+```
+podman build -t llamacpp-rpc -f llamacpp/Containerfile llamacpp
+llamacpp/cluster.sh up 2
+python3 llamacpp/trial.py --mode none --out llamacpp/smoke.jsonl                      # plumbing: usage.prompt_tokens and timings.prompt_ms present?
+python3 llamacpp/trial.py --mode killproc --out llamacpp/trials.jsonl                 # reset: expect sub-second detect, then relaunch
+python3 llamacpp/trial.py --mode kill     --out llamacpp/trials.jsonl                 # vanished namespace: expect no detection (harness stall timeout 600 s)
+python3 llamacpp/trial.py --mode pause    --out llamacpp/trials.jsonl
+for n in 33 512 2048 8192; do python3 llamacpp/trial.py --mode killproc --prompt-tokens $n --out llamacpp/trials.jsonl; done   # prefill vs length
+python3 analyze.py llamacpp/trials.jsonl
+```
+
 ## Status
 
 - [x] failure paths and constants read from source (exo bc412e2, vLLM 8407bc0)
@@ -66,4 +85,6 @@ python3 analyze.py vllm/trials.jsonl
 - [x] reported upstream: exo placement deadlock [exo#2464](https://github.com/exo-explore/exo/issues/2464), mlx-cpu pairing in [exo#2359](https://github.com/exo-explore/exo/issues/2359) (2026-10-23)
 - [x] vLLM plumbing check (2026-10-23); CPU install needed four fixes, documented in `vllm/trial.py`
 - [x] 10 trials per (system, mode) (exo 2026-10-21..23: kill/pause/cut worker, kill master ×10, pause/cut master ×5; vLLM 2026-10-24/25: kill, pause ×10)
+- [x] exo and vLLM analysed: `RESULTS.md`
+- [ ] llama.cpp: plumbing check, 10 × killproc, 5 × kill / pause / cut, prefill-length sweep
 - [ ] measured $C$ into the resilience model; update its applicability section

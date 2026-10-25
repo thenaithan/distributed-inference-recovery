@@ -91,8 +91,8 @@ def parts(r):
     out = dict(
         detect=(r["t_stream_end"] - f) if detected(r) else None,
         # vllm: the port closing is what an orchestrator sees; the process can outlive it (t_server_exit None)
-        gone=(pick(r, "t_instance_gone", "t_port_closed", "t_server_exit") - f)
-             if f and pick(r, "t_instance_gone", "t_port_closed", "t_server_exit") else None,
+        gone=(pick(r, "t_instance_gone", "t_port_closed", "t_server_exit", "t_main_exit") - f)
+             if f and pick(r, "t_instance_gone", "t_port_closed", "t_server_exit", "t_main_exit") else None,
         replace_wait=(r["t_replace_cmd"] - r["t_replace_try"]) if r.get("t_replace_cmd") and r.get("t_replace_try") else None,
         load=phase(tl, "RunnerLoading", "RunnerLoaded"),
         warmup=phase(tl, "RunnerWarmingUp", "RunnerReady"),
@@ -102,6 +102,8 @@ def parts(r):
         C=(r["t_resubmit_first_token"] - f) if f and r.get("t_resubmit_first_token") else None,
         prompt_tokens=(r.get("resubmit_usage") or r.get("usage") or {}).get("prompt_tokens"),
         warmup_tokens=r.get("warmup_tokens"),
+        # llama.cpp reports its own prefill time (timings.prompt_ms); exo/vLLM do not
+        prefill_reported=((r.get("resubmit_timings") or r.get("timings") or {}).get("prompt_ms") or 0) / 1000 or None,
     )
     # steady decode: before the injection (skip the last interval), or all of a failure-free run
     cut = None if r.get("mode") == "none" else max((r.get("at_token") or 10**9) - 2, 0)
@@ -120,7 +122,7 @@ def fmt(vals, unit="s"):
 def summarize(rows, label):
     P = [parts(r) for r in rows]
     print(f"\n{label}   median (min–max, n)")
-    for key in ("detect", "gone", "replace_wait", "load", "warmup", "place_to_ready", "prefill", "C"):
+    for key in ("detect", "gone", "replace_wait", "load", "warmup", "place_to_ready", "prefill", "prefill_reported", "C"):
         print(f"  {key:<14}", fmt([p[key] for p in P]))
     # Detection can be bimodal (master loss: a zenoh session expiry at ~3 s, or the 30 s
     # heartbeat timeout), which a median hides; show the values while there are few.

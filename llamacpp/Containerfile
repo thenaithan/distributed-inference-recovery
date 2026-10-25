@@ -1,0 +1,28 @@
+# llama.cpp with the RPC backend, CPU only. One image serves both roles:
+#   ggml-rpc-server  (a remote host holding a layer slice)
+#   llama-server     (the main host: tokenizer, sampling, HTTP API, the --rpc client)
+# Build once:  podman build -t llamacpp-rpc -f llamacpp/Containerfile llamacpp
+ARG LLAMA_COMMIT=74bca39
+
+FROM docker.io/library/debian:bookworm-slim AS build
+ARG LLAMA_COMMIT
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential cmake libcurl4-openssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt
+RUN git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp && git checkout ${LLAMA_COMMIT}
+WORKDIR /opt/llama.cpp
+# CPU backend + RPC. No GPU. Native CPU flags off so the image runs on any x86-64.
+RUN cmake -B build -DGGML_RPC=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j --target ggml-rpc-server llama-server llama-cli
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libcurl4 libgomp1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /opt/llama.cpp/build/bin/ /opt/llama.cpp/bin/
+ENV PATH=/opt/llama.cpp/bin:$PATH
+# model files live in a shared volume
+ENV LLAMA_CACHE=/models
+VOLUME /models
+EXPOSE 50052/tcp 8080/tcp
+# the role is chosen by the command: ggml-rpc-server ... | llama-server ...
