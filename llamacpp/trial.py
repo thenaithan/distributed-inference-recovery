@@ -13,7 +13,12 @@ error, has no socket timeout and no keepalive, and keeps a static peer list. So:
   killproc  SIGKILL the rpc-server process inside its container (kernel resets the TCP
             connection; the main host's recv fails at once and it aborts)
   pause     SIGSTOP rpc-i: the main host blocks in recv; prediction: never detected
-  cut       network disconnect: same prediction as pause
+  cut       network disconnect: same prediction as pause. Recovery differs: after the heal the
+            rpc host is still blocked serving the vanished main host's connection (the rpc
+            server accepts one client at a time, ggml-rpc.cpp start_server loop, no keepalive),
+            so a restarted main host connects but never gets its hello answered. The harness
+            gives that restart CUT_MAIN_WAIT seconds, records main_restart_stuck, then recreates
+            the whole cluster as for kill and measures recovery from there.
   none      plumbing check
 
 Timestamps (one host clock): request, each token, injection, stream end, main-host
@@ -40,6 +45,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BASE = "http://localhost:8080"
 STALL_TIMEOUT = 600.0   # no token for this long -> harness gives up ("harness_timeout")
+CUT_MAIN_WAIT = 120.0   # cut: how long a main-host-only restart gets before the whole cluster is recreated
 PARA = ("The river rises in the hills, gathers smaller streams, bends through farmland, "
         "slows across the plain, and reaches the sea by a wide delta. ")
 
@@ -213,7 +219,9 @@ def main() -> None:
         rec["rpc_state_after"] = rpc_state(args.fail_rpc)
         # the main host aborts on a transport error; a hang leaves it blocked. Either way,
         # recovery = restart the main host (the rpc host too, if it is gone) and resubmit.
-        rec["t_main_exit"] = wait_main_exit(timeout=60.0)
+        # an aborted main host is gone within a second; after a harness_timeout it is hung and
+        # will not exit, so do not sit on it (records 16-21 of 2026-10-25 carry a 60 s wait here)
+        rec["t_main_exit"] = wait_main_exit(timeout=5.0 if kind == "harness_timeout" else 60.0)
         if args.mode == "pause":
             sh("resume", args.fail_rpc)
         elif args.mode == "cut":
@@ -223,11 +231,23 @@ def main() -> None:
             pass
         try:
             if args.mode in ("kill", "killproc"):
+                rec["t_relaunch"] = now()  # before the recreate, as vllm/trial.py stamps before Popen
                 subprocess.run([str(HERE / "cluster.sh"), "up"], capture_output=True, text=True, check=True)
-                rec["t_relaunch"] = now()
+                rec["t_ready_again"] = wait_ready()
+            elif args.mode == "cut":
+                rec["t_relaunch"] = sh("main")
+                try:
+                    rec["t_ready_again"] = wait_ready(timeout=CUT_MAIN_WAIT)
+                    rec["main_restart_stuck"] = False
+                except RuntimeError:
+                    rec["main_restart_stuck"] = True
+                    log(f"main host not healthy {CUT_MAIN_WAIT:.0f}s after restart (rpc host still holds the dead connection); recreating the cluster")
+                    rec["t_relaunch_all"] = now()
+                    subprocess.run([str(HERE / "cluster.sh"), "up"], capture_output=True, text=True, check=True)
+                    rec["t_ready_again"] = wait_ready()
             else:
                 rec["t_relaunch"] = sh("main")
-            rec["t_ready_again"] = wait_ready()
+                rec["t_ready_again"] = wait_ready()
             first = {}
             t_resub = now()
             n2, t_end2, kind2, _, usage2, timings2 = stream(prompt, lambda i, t: first.setdefault("t", t),

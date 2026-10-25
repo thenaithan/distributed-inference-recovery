@@ -37,9 +37,12 @@ try:
     for line in open(path):
         if not line.strip(): continue
         r = json.loads(line)
-        if r.get("mode") == mode and r.get("prompt_tokens_requested", 33) == ptok \
-           and r.get("t_resubmit_first_token") is not None:
-            n += 1
+        if r.get("mode") != mode or r.get("prompt_tokens_requested", 33) != ptok \
+           or r.get("t_resubmit_first_token") is None or not r.get("t_fail"):
+            continue
+        if mode in ("kill", "killproc") and r.get("rpc_state_after") != "exited":
+            continue  # injection did not take (records before cluster.sh killed from the host)
+        n += 1
 except FileNotFoundError:
     pass
 print(n)

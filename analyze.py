@@ -177,6 +177,13 @@ def main():
     ap.add_argument("--regime", choices=sorted(REGIMES))
     args = ap.parse_args()
     rows = [json.loads(l) for l in open(args.path) if l.strip()]
+    # llama.cpp kill/killproc records are valid only if the rpc host really went down; the two
+    # killproc records of 2026-10-25 before cluster.sh killed from the host lack rpc_state_after
+    bad = [r for r in rows if r.get("system") == "llamacpp-rpc" and r.get("mode") in ("kill", "killproc")
+           and r.get("t_fail") and r.get("rpc_state_after") != "exited"]
+    if bad:
+        print(f"skipping {len(bad)} llamacpp record(s) whose injection did not take (rpc host not exited)")
+        rows = [r for r in rows if r not in bad]
     by_mode: dict = {}
     for r in rows:
         # master loss takes a different path (election) from worker loss: keep them apart
