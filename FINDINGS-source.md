@@ -290,6 +290,33 @@ prefill per token on CPU is a real number (batched, optimised), which the articl
 restatement needs; `--prompt-tokens` in the harness sweeps it, and `llama-server`
 reports `timings.prompt_ms` itself.
 
+**Measured (2026-10-25; `ggml-org/Qwen3-0.6B-GGUF` Q8_0, two rpc hosts with one layer slice
+each, 4 threads each, main host runs no layers; 61 actual prompt tokens; the failed host is
+rpc-1).** killproc (n=8) and kill (n=5) are one case: the main host aborts 0.5 s after the
+signal (0.5–0.8), its container is gone at 0.7 s, recreating the three containers and
+reaching `/health` takes 13 s, prefill 0.2 s, C 13.9–14.2 s (13.8–14.9). The kill prediction
+above was wrong for this injection: `podman kill` terminates the process before the
+namespace goes, so the kernel still sends the close and the main host sees a reset. pause
+(n=5): never detected; the harness gave up at 600 s in every trial, the main host still
+blocked in `recv`; recovery is a main-host restart, 2 s, so C is 600 s of harness patience
+plus about 3 s (the recorded 663 s includes a 60 s harness wait since removed). cut (n=5,
+plus two earlier attempts that hit a 900 s ready timeout): never detected either, and the
+heal does not help by itself. The rpc server serves one client at a time
+(`ggml_backend_rpc_start_server`, accept → `rpc_serve_client` → accept) and stays inside
+`rpc_serve_client` on the vanished main host's connection, so the restarted main host
+connects but its hello is never answered. It gets free in exactly one way: if it was
+mid-send when cut, the kernel exhausts retransmissions (`tcp_retries2` = 15, documented
+lower bound 924.6 s) and the send fails; three trials came back at 950, 952 and 954 s after
+the cut, the rpc host's own log dating the close to the second. If it was in `recv`, nothing
+ever fires: two trials still hung at 1500 s and two more were recreated by the harness after
+its 600 s restart window. A healed partition therefore heals llama.cpp RPC about half the
+time, 15 minutes later; otherwise the remote host must be restarted. Prompt-length sweep
+(killproc, n=2 each, prefill reported by `llama-server` on the fresh main host after the
+relaunch, since the first stream of each trial hits the prompt cache of the previous one):
+571 tokens 1.5 s, 2221 tokens 6.0 s, 6601 tokens 26.5 s, i.e. 2.6 to 4.0 ms per prompt
+token against 26 ms per decoded token, a prefill/decode ratio of 7 to 10 on this CPU
+(exo's MLX backend: about 1). C grows with it: 15.6, 19.9 and 40.4 s.
+
 **Strategy:** restart, with the operator as the only recovery mechanism; no state of
 the interrupted request survives (the KV cache for the remote layers lives in the
 rpc-server's memory and is addressed by the dead process's buffer ids).
