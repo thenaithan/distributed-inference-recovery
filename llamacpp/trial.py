@@ -45,7 +45,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BASE = "http://localhost:8080"
 STALL_TIMEOUT = 600.0   # no token for this long -> harness gives up ("harness_timeout")
-CUT_MAIN_WAIT = 120.0   # cut: how long a main-host-only restart gets before the whole cluster is recreated
+# cut: how long a main-host-only restart gets before the whole cluster is recreated. Trials 21
+# and 24 (2026-10-25) came back 952-954 s after the cut: the rpc host was mid-send when cut and
+# the kernel gave up retransmitting (tcp_retries2 = 15, ~924 s). An rpc host that was in recv
+# never comes back. 600 s after a restart at ~610 s covers the first case.
+CUT_MAIN_WAIT = 600.0
 PARA = ("The river rises in the hills, gathers smaller streams, bends through farmland, "
         "slows across the plain, and reaches the sea by a wide delta. ")
 
@@ -81,6 +85,14 @@ def injection_took(mode: str, i: int) -> bool:
     """What the container must look like after the injection; 'cut' leaves no visible state."""
     st = rpc_state(i)
     return {"kill": st != "running", "killproc": st != "running", "pause": st == "paused"}.get(mode, True)
+
+
+def rpc_log_since(i: int, t: float) -> list[str]:
+    """The rpc server logs 'Accepted client connection' / 'Client connection closed'; with -t
+    the lines are stamped, which dates when it let go of the dead main host."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t - 1))
+    out = subprocess.run(["podman", "logs", "-t", "--since", since, f"rpc-{i}"], capture_output=True, text=True)
+    return [l for l in (out.stdout + out.stderr).splitlines() if "connection" in l.lower()][-10:]
 
 
 def main_running() -> bool:
@@ -256,6 +268,7 @@ def main() -> None:
                        resubmit_end_kind=kind2, resubmit_usage=usage2, resubmit_timings=timings2)
         except Exception as e:
             rec["recover_error"] = f"{type(e).__name__}: {e}"
+        rec["rpc_log_after"] = rpc_log_since(args.fail_rpc, state["t_fail"])
 
     with open(args.out, "a") as f:
         f.write(json.dumps(rec) + "\n")
