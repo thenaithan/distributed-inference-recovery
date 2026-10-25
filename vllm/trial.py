@@ -40,11 +40,13 @@ What happens, timestamped with one host clock:
   2. start a streaming completion; timestamp every token
   3. at token --at-token: SIGKILL (kill) or SIGSTOP (pause) worker --fail-rank
   4. read the stream until it ends (HTTP 500 / connection drop); timestamp
-  5. poll /health until it fails and until the server process is gone; timestamp both
+  5. poll /health until it fails (503), until the port closes, and until the server process
+     is gone; timestamp all three (the last may be None: the process can outlive its port)
   6. relaunch `vllm serve`, wait for /health, resubmit the prompt, timestamp first token
 
-So: detect = t_stream_end - t_fail (what the client sees), server_dead = t_server_exit - t_fail,
-recover = t_ready_again - t_server_exit (orchestrator relaunch, here done by this script),
+So: detect = t_stream_end - t_fail (what the client sees), gone = t_port_closed - t_fail (what
+an orchestrator probing the port sees), recover = t_ready_again - t_relaunch (relaunch, here
+done by this script as soon as the port closes),
 total C = t_resubmit_first_token - t_fail. Records one JSON line per trial.
 """
 
@@ -57,6 +59,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-0.6B")
@@ -109,12 +112,20 @@ def now() -> float:
     return time.time()
 
 
-def healthy(timeout=2.0) -> bool:
+def probe(timeout=2.0) -> str:
+    """'ok' (200), 'unhealthy' (any other HTTP answer, vLLM says 503 once the engine is dead)
+    or 'closed' (nothing accepts on the port: the HTTP server has shut down)."""
     try:
         with urllib.request.urlopen(f"{BASE}/health", timeout=timeout) as r:
-            return r.status == 200
+            return "ok" if r.status == 200 else "unhealthy"
+    except urllib.error.HTTPError:
+        return "unhealthy"
     except Exception:
-        return False
+        return "closed"
+
+
+def healthy(timeout=2.0) -> bool:
+    return probe(timeout) == "ok"
 
 
 def launch_server() -> tuple[subprocess.Popen, float, float]:
@@ -237,19 +248,28 @@ def main() -> None:
                inter_token_s=[round(b - a, 4) for a, b in zip(tokens, tokens[1:])], last_payload=last)
 
     if args.mode != "none":
-        # health flips and the server exits (watchdog) unless VLLM_KEEP_ALIVE_ON_ENGINE_DEATH
-        t_unhealthy = None
+        # health flips to 503, the HTTP server closes its port (5 s watchdog), the process exits.
+        # The three are recorded separately: in 4/10 pause trials on 2026-10-25 the API server
+        # process outlived its closed port by >400 s (see FINDINGS-source.md), so "gone" is
+        # t_port_closed; t_server_exit may be None.
         deadline = now() + 400
-        while now() < deadline and healthy(1.0):
+        rec["t_unhealthy"] = rec["t_port_closed"] = None
+        while now() < deadline:
+            state = probe(1.0)
+            if state != "ok" and rec["t_unhealthy"] is None:
+                rec["t_unhealthy"] = now()
+            if state == "closed":
+                rec["t_port_closed"] = now()
+                break
             time.sleep(0.2)
-        t_unhealthy = now()
-        rec["t_unhealthy"] = t_unhealthy
         if proc is not None:
             try:
-                proc.wait(timeout=400)
+                proc.wait(timeout=60)
                 rec["t_server_exit"] = now()
             except subprocess.TimeoutExpired:
                 rec["t_server_exit"] = None
+                proc.kill()  # the port is closed; what remains is a leak, not the system under test
+                rec["server_killed_by_harness"] = True
         if args.mode == "pause":
             try:
                 os.kill(pids[args.fail_rank], signal.SIGCONT)

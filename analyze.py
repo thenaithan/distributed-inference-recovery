@@ -90,7 +90,9 @@ def parts(r):
     tl = r.get("replace_status_timeline") or []
     out = dict(
         detect=(r["t_stream_end"] - f) if detected(r) else None,
-        gone=(pick(r, "t_instance_gone", "t_server_exit") - f) if f and pick(r, "t_instance_gone", "t_server_exit") else None,
+        # vllm: the port closing is what an orchestrator sees; the process can outlive it (t_server_exit None)
+        gone=(pick(r, "t_instance_gone", "t_port_closed", "t_server_exit") - f)
+             if f and pick(r, "t_instance_gone", "t_port_closed", "t_server_exit") else None,
         replace_wait=(r["t_replace_cmd"] - r["t_replace_try"]) if r.get("t_replace_cmd") and r.get("t_replace_try") else None,
         load=phase(tl, "RunnerLoading", "RunnerLoaded"),
         warmup=phase(tl, "RunnerWarmingUp", "RunnerReady"),
