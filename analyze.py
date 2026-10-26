@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Turn trial logs from exo/ or vllm/ into C and its parts, in seconds and in tokens,
+"""Turn trial logs from exo/, vllm/ or llamacpp/ into C and its parts, in seconds and in tokens,
 and into churnsim parameters.
 
     python3 analyze.py exo/trials.jsonl
     python3 analyze.py vllm/trials.jsonl
+    python3 analyze.py llamacpp/trials.jsonl
     python3 analyze.py exo/trials.jsonl --regime tvbox-26b     # restate C in the article's regime
 
 Per trial, seconds after the injected failure (t_fail) unless marked:
@@ -11,7 +12,8 @@ Per trial, seconds after the injected failure (t_fail) unless marked:
   detect        the client learns the request is dead (t_stream_end). Token-based: exo's
                 SSE keep-alives make socket timeouts useless, so this is whatever the
                 server's own detector took to emit the error chunk.
-  gone          the system has acted (exo: InstanceDeleted; vllm: server exited)
+  gone          the system has acted (exo: InstanceDeleted; vllm: port closed or server
+                exited; llama.cpp: main host exited)
   replace_wait  exo only: placement refused (400) until the dead node is dropped
                 (t_replace_cmd - t_replace_try)
   load          weights loaded on the replacement (from the runner status timeline:
@@ -19,6 +21,7 @@ Per trial, seconds after the injected failure (t_fail) unless marked:
                 timeline is missing
   warmup        RunnerWarmingUp -> RunnerReady; exo decodes WARMUP_TOKENS tokens here
   prefill       resubmitted request -> first token; prompt_tokens from the usage field
+                (llama.cpp also reports its own timings.prompt_ms, shown as prefill_reported)
   C             first token of the resubmitted request: the full cost of one failure for
                 a request that is then restarted from scratch
 
@@ -29,7 +32,7 @@ prompt_tokens at per-token speeds DERIVED from the Frontier Red Team article's f
 the instance to be deleted, placement refusal, runner creation, load) is kept as measured. This is a restatement under a stated
 assumption, not a measurement.
 
-Mapping to churnsim: both systems are Strategy.RESTART. detect_time = detect;
+Mapping to churnsim: all three systems are Strategy.RESTART. detect_time = detect;
 reconnect_time = C minus prefill (the sim charges the re-run of the prefix as hops).
 """
 

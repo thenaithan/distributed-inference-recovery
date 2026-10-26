@@ -8,10 +8,10 @@ measurement so that the expectations can be checked rather than fitted.
 `distributed-inference-resilience` fits one constant to a 2023 paper: $C$, the cost of
 one failure (detect it, find a replacement, rebuild state). Every threshold in that work
 is $1/(S C)$ or $(1-p)^{ST}$ with a restart cost per failure. Experiment 3 measures $C$
-and its parts on two systems people run today, exo and vLLM, under three ways of losing
-a node, and replaces the fitted constant with a measured distribution.
+and its parts on systems people run today, exo and vLLM (and, added 2026-10-24 after the
+vLLM trials, llama.cpp's RPC backend), under three ways of losing a node, and replaces the fitted constant with a measured distribution.
 
-A second question falls out of the source reading (FINDINGS-source.md): both modern
+A second question falls out of the source reading (FINDINGS-source.md): all of these
 systems restart requests from scratch and restart nothing by themselves. So the
 measurement also answers "what does a failure cost a request on a current stack",
 which is the number the public conclusion's applicability section currently states
@@ -139,12 +139,35 @@ is the single largest number in the study and the one to lead with.
 
 ## Running it
 
-Both harnesses run on one Linux machine, no GPU, and write one JSON line per trial.
+The harnesses run on one Linux machine, no GPU, and write one JSON line per trial.
 `analyze.py` reads the lines and prints the four times above plus the churnsim
 parameters. Expect to run each (system, mode) ten times; the distributions matter more
 than the medians because detection is bimodal.
 
-The authoring sandbox cannot run either system (no model downloads), so harness changes
+The authoring sandbox cannot run any of the systems (no model downloads), so harness changes
 are checked against stub servers and synthetic records there and executed on the trial
 machine. Run `--mode none` first after any harness change. The exo plumbing check
-passed on 2026-10-21 (NOTES-2026-10-21.md); vLLM has not been run.
+passed on 2026-10-21, vLLM's on 2026-10-23 and llama.cpp's on 2026-10-25 (NOTES-2026-10-21.md).
+
+## Addendum (2026-10-26): what the measurements did to the predictions
+
+The predictions above are left as written. RESULTS.md §8 checks each one; the corrections,
+in short:
+
+- exo, worker lost: detection is not the 5 s poll or the 90 s stall detector but the
+  master's 15 s node-silence clock, for kill, pause and cut alike (15.0 s, n=33). The
+  placement refusal adds nothing, because the node is already dropped when the stream ends.
+- exo, master lost: three detection paths, not one: 3.3 s (link close), 13.2 s (zenoh
+  lease) or 30 to 36 s (heartbeat backstop); which one fires is not deterministic for kill.
+- vLLM, worker killed: detect 1.5 s rather than well under 1 s, because the executor waits
+  on the surviving rank's blocked send before it acts on the sentinel; relaunch 62 s, at
+  the top of the 20 to 60 s range, from warm-up compilation on every start. Pause: 300.0 s,
+  as predicted, and the largest number for a system that detects at all.
+- llama.cpp RPC (predictions in FINDINGS-source.md, written from source on 2026-10-24
+  before its trials): killproc as predicted (0.6 s, 13 s relaunch). The container kill was
+  predicted to go undetected and was not: `podman kill` ends the process before the
+  namespace, so the kernel closes the connection. Pause and cut are never detected, as
+  predicted; a healed partition recovers only if the rpc host was mid-send when cut
+  (`tcp_retries2`, about 950 s), otherwise the remote host must be restarted. Prefill is
+  2.6 to 4.0 ms/token against 26 ms/token decode, a ratio of 7 to 10, which gives the
+  regime restatement a measured constant between exo's ≈ 1 and the article's ≈ 15.

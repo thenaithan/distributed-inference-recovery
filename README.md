@@ -13,7 +13,7 @@ modes: a clean crash, a silent hang, and a network partition.
 
 ## Contents
 
-- `FINDINGS-source.md` – what exo and vLLM do on node loss, read from source with
+- `FINDINGS-source.md` – what exo, vLLM and llama.cpp RPC do on node loss, read from source with
   file:line, and what it means for the model before any measurement. Start here.
 - `STUDY.md` – framing (incl. the Frontier Red Team self-replication article),
   predictions written before measuring, reading list, how to run.
@@ -25,7 +25,7 @@ modes: a clean crash, a silent hang, and a network partition.
 - `llamacpp/` – `Containerfile`, `cluster.sh` (N `ggml-rpc-server` hosts + one
   `llama-server` main host on a podman network), `trial.py` (kill / killproc / pause /
   cut an rpc host; `--prompt-tokens` sweeps prefill length).
-- `RESULTS.md` – measured numbers for exo and vLLM.
+- `RESULTS.md` – measured numbers for all three systems, and the predictions checked against them (§8).
 - `analyze.py` – trial logs → detect / gone / recover / C, and churnsim parameters.
 
 ## Quick start
@@ -35,7 +35,8 @@ CPU pinning is off by default: exo's nodes float over all host CPUs and vLLM use
 `EXO_CPUSETS` (exo, one set per node, e.g. `"0-3 4-7 8-11"`) and `VLLM_CPU_OMP_THREADS_BIND`
 (vLLM, e.g. `"0-3|4-7"`). exo's pinning needs the `cpuset` cgroup controller delegated to
 your user (a systemd change and a re-login); `cluster.sh up` prints how if it is missing.
-Each trial records the CPU sets or binding it ran with.
+Each trial records the CPU sets or binding it ran with. The llama.cpp harness has no pinning;
+each host runs `LLAMA_THREADS` threads (default 4).
 
 exo (needs Podman with IPv6 networking; first build downloads the model per node):
 
@@ -71,20 +72,20 @@ podman build -t llamacpp-rpc -f llamacpp/Containerfile llamacpp
 llamacpp/cluster.sh up 2
 python3 llamacpp/trial.py --mode none --out llamacpp/smoke.jsonl                      # plumbing: usage.prompt_tokens and timings.prompt_ms present?
 python3 llamacpp/trial.py --mode killproc --out llamacpp/trials.jsonl                 # reset: expect sub-second detect, then relaunch
-python3 llamacpp/trial.py --mode kill     --out llamacpp/trials.jsonl                 # vanished namespace: expect no detection (harness stall timeout 600 s)
-python3 llamacpp/trial.py --mode pause    --out llamacpp/trials.jsonl
+python3 llamacpp/trial.py --mode kill     --out llamacpp/trials.jsonl                 # container killed: measured as the same reset as killproc (RESULTS §5)
+python3 llamacpp/trial.py --mode pause    --out llamacpp/trials.jsonl                 # hang: never detected; the harness gives up at 600 s
 nohup llamacpp/run_trials.sh all > llamacpp/logs/run_trials.out 2>&1 &              # unattended: 10 × killproc, 5 × kill/pause/cut, killproc at 512/2048/6144 prompt tokens ×2 (~4 h)
 python3 analyze.py llamacpp/trials.jsonl
 ```
 
 ## Status
 
-- [x] failure paths and constants read from source (exo bc412e2, vLLM 8407bc0)
+- [x] failure paths and constants read from source (exo bc412e2, vLLM 8407bc0, llama.cpp 74bca39)
 - [x] harnesses written
 - [x] exo plumbing check (2026-10-21); image fixes for exo's mlx-cpu pairing and MLX's JIT path
 - [x] reported upstream: exo placement deadlock [exo#2464](https://github.com/exo-explore/exo/issues/2464), mlx-cpu pairing in [exo#2359](https://github.com/exo-explore/exo/issues/2359) (2026-10-23)
 - [x] vLLM plumbing check (2026-10-23); CPU install needed four fixes, documented in `vllm/trial.py`
 - [x] 10 trials per (system, mode) (exo 2026-10-21..23: kill/pause/cut worker, kill master ×10, pause/cut master ×5; vLLM 2026-10-24/25: kill, pause ×10)
-- [x] exo and vLLM analysed: `RESULTS.md`
-- [x] llama.cpp (2026-10-25): plumbing check, killproc ×8 (two more owed: `llamacpp/run_trials.sh killproc 10`), kill / pause / cut ×5, prefill sweep at 571 / 2221 / 6601 prompt tokens ×2; `RESULTS.md` §5
+- [x] llama.cpp (2026-10-25/26): plumbing check, killproc ×10, kill / pause / cut ×5, prefill sweep at 571 / 2221 / 6601 prompt tokens ×2
+- [x] all three systems analysed: `RESULTS.md` (llama.cpp in §5, predictions checked in §8)
 - [ ] measured $C$ into the resilience model; update its applicability section

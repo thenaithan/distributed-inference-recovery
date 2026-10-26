@@ -1,6 +1,6 @@
-# What exo and vLLM do when a node fails: read from source
+# What exo, vLLM and llama.cpp do when a node fails: read from source
 
-Before measuring anything, both systems were read for their failure paths, the way the
+Before measuring anything, each system was read for its failure paths, the way the
 Petals client was read for NOTES.md §4. Every claim below cites file:line in the
 checked-out commit; constants are the defaults in code, not documentation.
 
@@ -292,7 +292,7 @@ reports `timings.prompt_ms` itself.
 
 **Measured (2026-10-25; `ggml-org/Qwen3-0.6B-GGUF` Q8_0, two rpc hosts with one layer slice
 each, 4 threads each, main host runs no layers; 61 actual prompt tokens; the failed host is
-rpc-1).** killproc (n=8) and kill (n=5) are one case: the main host aborts 0.5 s after the
+rpc-1; killproc n=10 includes two trials run 2026-10-26).** killproc (n=10) and kill (n=5) are one case: the main host aborts 0.5 s after the
 signal (0.5–0.8), its container is gone at 0.7 s, recreating the three containers and
 reaching `/health` takes 13 s, prefill 0.2 s, C 13.9–14.2 s (13.8–14.9). The kill prediction
 above was wrong for this injection: `podman kill` terminates the process before the

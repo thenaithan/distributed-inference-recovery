@@ -13,13 +13,13 @@ exo bc412e2 with the image deviations noted there, `mlx-community/Qwen3-0.6B-8bi
 slice each and a `llama-server` main host with no layers, 4 threads per host. One
 request, failure injected after 5 output tokens of 30, prompt of 33 tokens (61 after the
 chat template). exo trials 2026-10-21 to 23 (53), vLLM 2026-10-24/25 (20), llama.cpp
-2026-10-25 (32 valid, §5).
+2026-10-25/26 (34 valid, §5).
 
 ## 1. Summary table
 
 | | exo, worker lost | exo, master lost | vLLM, PP worker killed | vLLM, PP worker hung | llama.cpp, rpc host killed | llama.cpp, rpc host hung or cut |
 |---|---|---|---|---|---|---|
-| detect (client learns the request is dead) | **15.0 s** (14.3–16.0, n=33) | 3.3 / 13.2 / ~31 s, which one is not deterministic (n=20) | **1.5 s** (0.0–3.7, n=10) | **300.0 s** (300.0–300.1, n=10) | **0.5 s** (0.5–0.8, n=13) | **never** (harness gave up at 600 s, n=10) |
+| detect (client learns the request is dead) | **15.0 s** (14.3–16.0, n=33) | 3.3 / 13.2 / ~31 s, which one is not deterministic (n=20) | **1.5 s** (0.0–3.7, n=10) | **300.0 s** (300.0–300.1, n=10) | **0.5 s** (0.5–0.8, n=15) | **never** (harness gave up at 600 s, n=10) |
 | gone (instance deleted / server exited) | 15.0 s | 28 or 46 s | 4.5 s (4.0–8.6) | 305 s | 0.7 s | never |
 | re-place or relaunch to serving | 174 s (173–180): load 0.6 s, warmup 168 s | 174 s | 62 s (59–75) | 75 s (63–96) | 13 s (recreate 3 containers) | 2 s, if the remote host lets go (§5) |
 | prefill of the 33-token prompt | 85 s | 85 s | 0.3 s | 0.3 s | 0.2 s | 0.2 s |
@@ -31,7 +31,7 @@ chat template). exo trials 2026-10-21 to 23 (53), vLLM 2026-10-24/25 (20), llama
 No system preserved anything of the interrupted request; every trial ended with an
 error on the stream, or with the harness giving up on a stream that never ended, and a
 fresh request after recovery. That was predicted from source (FINDINGS-source.md) and
-holds without exception in 105 trials.
+holds without exception in 107 trials.
 
 ## 2. exo: a lost worker is one case, decided by the master's clock
 
@@ -105,7 +105,7 @@ range in §1.
 
 | mode (n) | detect | main host exits | relaunch to serving | C |
 |---|---|---|---|---|
-| killproc, SIGKILL the rpc-server process (8) | 0.6 s (0.5–0.8) | 0.8 s | 13 s | 14.2 s (13.8–14.9) |
+| killproc, SIGKILL the rpc-server process (10) | 0.6 s (0.5–0.8) | 0.8 s | 13 s | 14.2 s (13.8–14.9) |
 | kill, `podman kill` the container (5) | 0.5 s (0.5–0.6) | 0.7 s | 13 s | 13.9 s (13.8–14.5) |
 | pause, SIGSTOP (5) | never (600 s) | never | 2 s (main host only) | 600 s of harness patience + 3 s |
 | cut, network disconnect (5 complete, 7 attempts) | never (600 s) | never | 283 s (144–624) after the heal | 952 s (760–1240) |
@@ -130,7 +130,7 @@ recreated by the harness after a 600 s restart window. Whether a healed partitio
 llama.cpp RPC is decided by the pipeline phase at the instant of the cut, roughly a coin
 flip, and when it does, it takes 15 minutes.
 
-**Prefill as a function of prompt length** (killproc, n=2 per length; prefill as reported by
+**Prefill as a function of prompt length** (killproc, n=2 per length, n=10 at 61; prefill as reported by
 `llama-server` on the fresh main host after the relaunch; the first stream of a trial hits
 the prompt cache left by the previous trial's resubmit, so it is not used):
 
