@@ -315,7 +315,53 @@ $C$ as a function of prompt length was measured on llama.cpp only.
 
 ## Conclusion
 
-<!-- CONCLUSION (Nat) -->
+In 107 trials over 11 cases and three systems nothing of an interrupted request survived a
+single node failure. exo, vLLM and llama.cpp's RPC backend all use the restart strategy that
+the first experiment tested. The strategy that stops completing once a generation expects
+about one failure and none re-places or relaunches anything on its own. The one stack that
+does handle recovery from within the system, Petals, is where the public repo has had no
+commits since September 2024.
+
+Detection was done by timer and not by signal. exo ends the request 15s after a worker is
+lost. Whether the worker crashed, hung or was partitioned makes no difference, because the
+master's silence timeout fires before any other detector can. The fast path that was
+predicted from source never even appeared. vLLM detects a crash in 1.5s and a hang in 300s.
+That is a factor of 200 which is set as one constant. llama.cpp detects a reset in half a
+second, but a hang or partition is never detected. Losing exo's master killed every request
+without losing a shard. It would take 3, 13, or 31 seconds depending on which path happened
+to win. This confirms the second experiment's finding: on real code coordination is the
+cheaper cut.
+
+C (cost of recovery) is dominated by what happens after detection; 275s on exo, of which
+92% is warming up a fresh runner and prefilling the prompt; 67s on vLLM, this was nearly
+all relaunch; 14s on llama.cpp, all of it spent on the recreation of the hosts by hand. Two
+things the medians hide:
+
+1. There is a bug in exo that wedges the run 2-4% of the time. exo has no timeout for it.
+2. On llama.cpp a partitioned host can only come back if it was mid-send when cut, this is
+   caused by the kernel giving up after about 950s. This happened roughly half the time.
+
+For the model this settles the parameters and removes one question. The cascade threshold
+$\lambda^* = 1/(SC)$ does not apply, because nothing replays. What governs a long job on
+these stacks is the chance of seeing no failure at all, $e^{-N\lambda D}$. The Frontier
+Red Team article's regime, 15 devices for 30 hours, completes 90% of the time only if the
+mean device lifetime is 178 days; at 7 days it completes 7% of the time, at one day never.
+With Petals-style replay at the measured C, the 7-day case loses 12 minutes on exo and 36
+seconds on llama.cpp. The recovery mechanism is the entire difference between a swarm that
+finishes and one that does not, and no stack I tested ships it. Automating the relaunch
+would be small work, a supervisor around what the harness does by hand, and I expect any
+operator or swarm to add it; it does not change C. Recovery inside a request is the
+mechanism that changes the outcome, and it was not built here.
+
+The experiment was one CPU host with a near-ideal network. I fired one request at a time,
+used small models, and 5 to 12 trials per case. exo ran with a patched image, vLLM's
+partition case was not measured, and the figures restated in the article's hardware regime
+are derived from the article's own per-token speeds, not measured. The predictions were
+right on the magnitudes and wrong on three mechanisms, each explained afterwards by a
+kernel or scheduler detail I had not read. Prefill came out 7 to 10 times cheaper per token
+than decode on a batched CPU backend; that ratio, not the article's implied 15 or exo's 1,
+is what a conversion to other hardware should use. The constants are now in the public
+model's applicability section. The next experiment is traffic fingerprinting.
 
 ## Repository
 
