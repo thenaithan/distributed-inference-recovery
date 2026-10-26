@@ -136,7 +136,7 @@ the prompt cache left by the previous trial's resubmit, so it is not used):
 
 | actual prompt tokens | prefill | per token | C |
 |---|---|---|---|
-| 61 | 0.2 s | 3.3 ms | 14.2 s |
+| 61 | 0.2 s | 2.8 ms | 14.2 s |
 | 571 | 1.5 s | 2.6 ms | 15.6 s |
 | 2221 | 6.0 s | 2.7 ms | 19.9 s |
 | 6601 | 26.5 s | 4.0 ms | 40.4 s |
