@@ -1,6 +1,44 @@
 # distributed-inference-recovery
 
-<!-- INTRO (Nat) -->
+This is the third experiment in a series I began on the detection, containment and
+removal of a hypothetical AI swarm that is no longer under human control. The first
+experiment reproduced the failure curve of Petals ([Borzunov et al., *Distributed Inference
+and Fine-tuning of Large Language Models Over The Internet*, NeurIPS 2023](https://arxiv.org/abs/2312.08361))
+and reduced recovery to a single constant C; the second looked into what cuts a swarm.
+Both ran on a model calibrated to the 2023 Petals paper, with the mechanism read from its
+2024 code ([distributed-inference-resilience](https://github.com/thenaithan/distributed-inference-resilience)).
+This third experiment measures that constant on three inference engines that are in use
+today and can run one model across several machines. It is written for two readers: the
+operator, who tries to keep the swarm serving under churn, and the defender, who needs the
+smallest intervention that stops a swarm they do not operate.
+
+I chose three systems: exo, vLLM and llama.cpp. exo is the consumer-device swarm that
+[the essay's](https://naithanweigh.com/writing/asymmetric-persistence/) scenario assumes;
+vLLM is the datacentre baseline, which I run in pipeline-parallel mode on CPU; llama.cpp's
+RPC backend is the stack most likely to be found on real consumer hardware. Petals was the
+only stack with in-request recovery, but its
+[public repository](https://github.com/bigscience-workshop/petals) has had no commits since
+September 2024.
+
+The question is what happens when one node fails: how long until the request is served
+again, and whether anything of the interrupted request survives. The reason for a third
+experiment came halfway through the first, when I found the Frontier Red Team article
+([Zhou and Freeman, *AI models may be capable of self-replicating without access to a
+datacenter*, 2026-10-12](https://www.anthropic.com/research/self-replicating-ai)). It
+chooses pipeline parallelism for fault tolerance, assumes a downed device is replaced and
+its state recomputed, and prices neither. This experiment supplies the cost. I read each
+failure path in source and wrote the predictions first, then injected the failure and
+timed it: 107 trials over 11 cases, one at a time, on one CPU host.
+
+The scope is to measure and model. None of the three systems re-places a lost node on its
+own, and this experiment does not build that for them; it measures what they do as
+shipped. I ran the trials; the source reading, harnesses, analysis and figures I developed
+together with Claude, acknowledged at the end. Every number in this document comes from
+the committed trial records (`trials.jsonl` in [`exo/`](exo/), [`vllm/`](vllm/) and
+[`llamacpp/`](llamacpp/)) by way of [`analyze.py`](analyze.py); the full tables are in
+[RESULTS.md](RESULTS.md), the failure paths and constants as read from source, with file
+and line, in [FINDINGS-source.md](FINDINGS-source.md), and the predictions written before
+measuring in [STUDY.md](STUDY.md).
 
 ## 1. What was measured
 
