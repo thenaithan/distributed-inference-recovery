@@ -14,7 +14,7 @@ smallest intervention that stops a swarm they do not operate.
 
 I chose three systems: exo, vLLM and llama.cpp. exo is the consumer-device swarm that
 [the essay's](https://naithanweigh.com/writing/asymmetric-persistence/) scenario assumes;
-vLLM is the datacentre baseline, which I run in pipeline-parallel mode on CPU; llama.cpp's
+vLLM is the datacenter baseline, which I run in pipeline-parallel mode on CPU; llama.cpp's
 RPC backend is the stack most likely to be found on real consumer hardware. Petals was the
 only stack with in-request recovery, but its
 [public repository](https://github.com/bigscience-workshop/petals) has had no commits since
@@ -28,7 +28,7 @@ datacenter*, 2026-10-12](https://www.anthropic.com/research/self-replicating-ai)
 chooses pipeline parallelism for fault tolerance, assumes a downed device is replaced and
 its state recomputed, and prices neither. This experiment supplies the cost. I read each
 failure path in source and wrote the predictions first, then injected the failure and
-timed it: 107 trials over 11 cases, one at a time, on one CPU host.
+timed it: 107 trials over 12 cases, one at a time, on one CPU host.
 
 The scope is to measure and model. None of the three systems re-places a lost node on its
 own, and this experiment does not build that for them; it measures what they do as
@@ -171,7 +171,7 @@ path is taken by chance.
 ![Where C goes](figures/breakdown.png)
 
 **exo: 92% of C is warmup plus prefill, 5% is detection.** Re-placement is accepted on the
-first try (`replace_wait` 0.0 s in all 46 recoveries: by the time the instance is deleted
+first try (`replace_wait` 0.0 s in all 51 recoveries: by the time the instance is deleted
 the dead node is already out of the topology). Load is 0.5 to 0.9 s (weights on disk).
 Warmup is 168 s: exo decodes 50 tokens before `RunnerReady`, at 3.4 s/token. Prefill of the
 33-token prompt is 85 s, 2.6 s/token, the same per-token cost as decode, because MLX's CPU
@@ -315,31 +315,31 @@ $C$ as a function of prompt length was measured on llama.cpp only.
 
 ## Conclusion
 
-In 107 trials over 11 cases and three systems nothing of an interrupted request survived a
+In 107 trials over 12 cases and three systems nothing of an interrupted request survived a
 single node failure. exo, vLLM and llama.cpp's RPC backend all use the restart strategy that
-the first experiment tested. The strategy that stops completing once a generation expects
-about one failure and none re-places or relaunches anything on its own. The one stack that
-does handle recovery from within the system, Petals, is where the public repo has had no
+the first experiment tested. That strategy stops completing once a generation expects
+about one failure, and none of them re-places or relaunches anything on its own. The one stack that
+does handle recovery from within the system, Petals, is one whose public repo has had no
 commits since September 2024.
 
-Detection was done by timer and not by signal. exo ends the request 15s after a worker is
+Detection was done by timer and not by signal. exo ends the request 15 s after a worker is
 lost. Whether the worker crashed, hung or was partitioned makes no difference, because the
 master's silence timeout fires before any other detector can. The fast path that was
-predicted from source never even appeared. vLLM detects a crash in 1.5s and a hang in 300s.
+predicted from source never even appeared. vLLM detects a crash in 1.5 s and a hang in 300 s.
 That is a factor of 200 which is set as one constant. llama.cpp detects a reset in half a
 second, but a hang or partition is never detected. Losing exo's master killed every request
 without losing a shard. It would take 3, 13, or 31 seconds depending on which path happened
 to win. This confirms the second experiment's finding: on real code coordination is the
 cheaper cut.
 
-C (cost of recovery) is dominated by what happens after detection; 275s on exo, of which
-92% is warming up a fresh runner and prefilling the prompt; 67s on vLLM, this was nearly
-all relaunch; 14s on llama.cpp, all of it spent on the recreation of the hosts by hand. Two
+C (cost of recovery) is dominated by what happens after detection; 275 s on exo, of which
+92% is warming up a fresh runner and prefilling the prompt; 67 s on vLLM, which was nearly
+all relaunch; 14 s on llama.cpp, all of it spent on the recreation of the hosts by hand. Two
 things the medians hide:
 
-1. There is a bug in exo that wedges the run 2-4% of the time. exo has no timeout for it.
-2. On llama.cpp a partitioned host can only come back if it was mid-send when cut, this is
-   caused by the kernel giving up after about 950s. This happened roughly half the time.
+1. There is a bug in exo that wedges the run 2 to 4% of the time. exo has no timeout for it.
+2. On llama.cpp a partitioned host can only come back if it was mid-send when cut; this is
+   caused by the kernel giving up after about 950 s. This happened roughly half the time.
 
 For the model this settles the parameters and removes one question. The cascade threshold
 $\lambda^* = 1/(SC)$ does not apply, because nothing replays. What governs a long job on
@@ -423,7 +423,7 @@ nohup llamacpp/run_trials.sh all > llamacpp/logs/run_trials.out 2>&1 &          
 python3 analyze.py llamacpp/trials.jsonl
 ```
 
-Figures: `python3 figures.py` (matplotlib) rewrites `figures/`.
+Figures: `pip install -r requirements.txt && python3 figures.py` rewrites `figures/`.
 
 ### Status
 
@@ -437,4 +437,4 @@ Figures: `python3 figures.py` (matplotlib) rewrites `figures/`.
 ## Acknowledgement
 
 The source reading, harnesses, analysis and figures were developed together with Claude
-(Anthropic). The trials were run, and the write-up is, by Naithan Weigh.
+(Anthropic). I ran the trials and wrote this up.

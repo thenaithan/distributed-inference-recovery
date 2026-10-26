@@ -6,9 +6,11 @@ checked-out commit; constants are the defaults in code, not documentation.
 
 - exo: `exo-explore/exo` at `bc412e2` (2026-10-13), Python under `src/exo`, networking in Rust.
 - vLLM: `vllm-project/vllm` at `8407bc0` (2026-10-20), V1 engine.
+- llama.cpp: `ggml-org/llama.cpp` at `74bca39`, RPC backend (read 2026-10-25, after the
+  vLLM trials; its section is at the end).
 
-The short version: **both are restart-from-scratch, and neither restarts anything by
-itself.** Petals (2023) is the only one of the three with in-request recovery.
+The short version: **all three are restart-from-scratch, and none restarts anything by
+itself.** Petals (2023) is the only one of the four with in-request recovery.
 
 | | Petals (NOTES §4) | exo | vLLM, plain PP | vLLM, disaggregated P/D |
 |---|---|---|---|---|
@@ -86,7 +88,7 @@ in-flight stream with a "generation interrupted" message (`api/main.py:227-229,
 **Client retry:** the API resends a `TextGeneration` command that was never accepted at
 10, 15 and 30 s (`api/main.py:236`); an accepted-then-failed generation is not retried.
 
-**Three things found while running it (NOTES-2026-10-21.md):** the API sends an SSE
+**Three things found while running it:** the API sends an SSE
 `: keep-alive` every 10 s while nothing happens (`api/keepalive.py`), so a client cannot
 detect a failure by socket timeout; detection is token-based and the client's effective
 detection time is whatever the server's own detector takes to emit the error chunk.
@@ -133,7 +135,7 @@ the master (`master/main.py:693-695`), readable at `GET /events` (last 10 000) a
 
 **Platform:** MLX only; Linux CPU via `uv sync --extra mlx-cpu` (`pyproject.toml:62`,
 README). Nodes need distinct IPs on one L2 with IPv6 multicast and identical ports, so
-on one machine that means containers on an IPv6-enabled network (`measure/exo/`).
+on one machine that means containers on an IPv6-enabled network (`exo/`).
 Smallest registered model: `mlx-community/Qwen3-0.6B-8bit`
 (`resources/inference_model_cards/`).
 
@@ -171,7 +173,7 @@ relaunch takes 62 s (59–75; the warm-up compile runs on every start even with 
 torch-compile cache warm), and C is 66.6 s (64.1–84.6). Pause: the client sees the error
 after 300.0 s in all ten trials (300.0–300.1), exactly `VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS`,
 followed by "RPC call to sample_tokens timed out"; the port closes about 5 s later and the
-relaunch takes 68 s (63–96), so C is 373 s (369–403, n=6). In the other four pause trials
+relaunch takes 75 s (63–96), so C is 373 s (369–403, n=6). In the other four pause trials
 the API server **process** outlived its closed port by more than 400 s (the harness then
 waited for it, so their recorded C of 775–785 s is a harness artefact, not a system
 number). The log differs in one place: on the six clean runs the shutdown logs "force
@@ -211,11 +213,11 @@ minutes to seconds".
 **Platform:** the CPU backend supports pipeline parallel across worker processes
 (`platforms/cpu.py:333-340`; `docs/getting_started/installation/cpu.md:313`; CI runs
 `-tp 2 -pp 2` on one CPU box). So `vllm serve <small model> -pp 2` on a laptop is a
-valid measurement target (`measure/vllm/`).
+valid measurement target (`vllm/`).
 
 ## What this means for the model before any measurement
 
-1. Of the three systems, the one with in-request recovery is the 2023 one. exo and
+1. Of Petals, exo and vLLM, the one with in-request recovery is the 2023 one. exo and
    vLLM are both the `restart` strategy of Experiment 1, which collapses once a
    generation expects about one failure, $p \approx 1/(ST)$. For them the relevant
    number is not λ* but the plain probability a request finishes: $(1-p)^{ST}$ per
@@ -243,7 +245,7 @@ distribution of:
 - recover: time until a replacement is serving (re-placed / relaunched and healthy)
 - C: time from failure to the first token of the resubmitted request
 
-plus steady-state inter-token time. `measure/analyze.py` computes these from the trial
+plus steady-state inter-token time. `analyze.py` computes these from the trial
 logs and prints `detect_time` and `reconnect_time` for `churnsim`.
 
 ## llama.cpp RPC backend (74bca39, 2026-10-25)

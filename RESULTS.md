@@ -6,7 +6,7 @@ analyze.py vllm/trials.jsonl` and `python3 analyze.py llamacpp/trials.jsonl` fro
 committed records. Medians with min–max and n. Times are
 seconds after the injected failure unless stated.
 
-Setup (NOTES-2026-10-21.md §7): i5-14600K, 20 logical CPUs unpinned, rootless Podman;
+Setup (README §1): i5-14600K, 20 logical CPUs unpinned, rootless Podman;
 exo bc412e2 with the image deviations noted there, `mlx-community/Qwen3-0.6B-8bit`,
 3 nodes, pipeline sharding; vLLM 0.32.0 CPU wheel, `Qwen/Qwen3-0.6B`, PP=2; llama.cpp
 74bca39, `ggml-org/Qwen3-0.6B-GGUF` Q8_0, two `ggml-rpc-server` hosts holding one layer
@@ -75,7 +75,7 @@ coordination failure stopping intact computation, the Experiment 2 finding in mi
 
 ## 4. Recovery cost
 
-**exo.** Re-placement is accepted first try (`replace_wait` 0.0 s in all 46 recoveries:
+**exo.** Re-placement is accepted first try (`replace_wait` 0.0 s in all 51 recoveries:
 by the time the instance is deleted the dead node is already out of the topology). Load
 is 0.5 to 0.9 s (weights on disk). Warmup is 168 s (167.5–177.1): exo decodes 50 tokens
 before `RunnerReady`, at 3.4 s/token, slower than the 2.4 s/token steady decode. Prefill
@@ -167,7 +167,7 @@ peer, 0 s if it was between steps and up to 3.7 s if mid-send.
 ## 7. Parameters for the resilience model
 
 All three systems are the `restart` strategy of Experiment 1 (the one that collapses once a
-generation expects about one failure, $p \approx 1/(ST)$), and neither re-places or
+generation expects about one failure, $p \approx 1/(ST)$), and none of them re-places or
 relaunches anything by itself: `join_rate` is whatever an operator or orchestrator
 supplies, and for a swarm nobody operates it is zero.
 

@@ -22,7 +22,7 @@ from documentation only.
 Zhou and Freeman, "AI models may be capable of self-replicating without access to a
 datacenter", Anthropic Frontier Red Team, 2026-10-12
 (https://www.anthropic.com/research/self-replicating-ai). Read in full on 2026-10-21;
-figures not stated in the article are marked **derived** here and in NOTES-2026-10-21.md.
+figures not stated in the article are marked **derived** here.
 
 The article argues that small models may soon self-replicate across commercial IoT
 devices, demonstrates Gemma4-26B-A4B pipeline-parallel over 15 Android TV boxes at
@@ -147,7 +147,7 @@ than the medians because detection is bimodal.
 The authoring sandbox cannot run any of the systems (no model downloads), so harness changes
 are checked against stub servers and synthetic records there and executed on the trial
 machine. Run `--mode none` first after any harness change. The exo plumbing check
-passed on 2026-10-21, vLLM's on 2026-10-23 and llama.cpp's on 2026-10-25 (NOTES-2026-10-21.md).
+passed on 2026-10-21, vLLM's on 2026-10-23 and llama.cpp's on 2026-10-25 (README, Status).
 
 ## Addendum (2026-10-26): what the measurements did to the predictions
 

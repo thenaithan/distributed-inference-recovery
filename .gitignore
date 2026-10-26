@@ -3,3 +3,4 @@ __pycache__/
 vllm-serve.log
 exo/logs/
 llamacpp/logs/
+.venv/
