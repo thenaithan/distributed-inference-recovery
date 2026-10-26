@@ -17,7 +17,6 @@ modes: a clean crash, a silent hang, and a network partition.
   file:line, and what it means for the model before any measurement. Start here.
 - `STUDY.md` – framing (incl. the Frontier Red Team self-replication article),
   predictions written before measuring, reading list, how to run.
-- `DECISIONS-2026-10-21.md` – decisions on the open points and the task list.
 - `exo/` – `Containerfile`, `cluster.sh` (N nodes in rootless Podman on an IPv6 network),
   `trial.py` (place, stream, inject failure, time recovery).
 - `vllm/` – `trial.py` (serve with `-pp 2` on CPU, stream, kill or pause a worker, time
